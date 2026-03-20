@@ -1,20 +1,22 @@
 # zippy.mk — Build system for self-contained Tcl/Tk zipfs binaries
 #
 # User sets these before including:
-#   SHELL_TYPE := wish | tclsh    (default: wish)
-#   DEPS       := tdom mtls tcllib img   (optional, any combination)
-#   APP_NAME   := myapp           (optional, omit for standalone interpreter)
+#   SHELL_TYPE  := wish | tclsh    (default: wish)
+#   DEPS        := tdom mtls tcllib img   (optional, any combination)
+#   BIN_NAME    := myapp           (optional, omit for standalone interpreter)
+#   APP_DIR     := .               (default: project root)
+#   APP_EXCLUDE :=                 (optional, extra excludes: space-separated names)
 
 # ==== Paths ====
-TCLZIPFS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+ZIPPYDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 BASEDIR      := $(CURDIR)
 BUILDDIR     := $(BASEDIR)/_build
-BINDIR       := $(BASEDIR)/bin
 PREFIX       := $(BUILDDIR)/local
 DEPSDIR      := $(BUILDDIR)/deps
-BUILD_TCL    := $(TCLZIPFS_DIR)/build.tcl
+BUILD_TCL    := $(ZIPPYDIR)/build.tcl
 
 SHELL_TYPE ?= wish
+APP_DIR    ?= .
 
 # ==== Versions ====
 TCL_VER    := 9.0.3
@@ -85,8 +87,16 @@ else
   BASE_INTERP := $(WISH)
 endif
 
+# ==== Built-in excludes ====
+_BUILTIN_EXCLUDES := $(notdir $(ZIPPYDIR)) _build Makefile
+ifdef BIN_NAME
+  _BUILTIN_EXCLUDES += $(BIN_NAME)
+endif
+_ALL_EXCLUDES := $(_BUILTIN_EXCLUDES) $(APP_EXCLUDE)
+_EXCLUDES_CSV := $(subst $(eval ) ,$(shell echo ','),$(_ALL_EXCLUDES))
+
 # ==== Default target ====
-ifdef APP_NAME
+ifdef BIN_NAME
   .DEFAULT_GOAL := app
 else
   .DEFAULT_GOAL := $(SHELL_TYPE)
@@ -199,31 +209,32 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH)
 
 # ==== App ====
 
-ifdef APP_NAME
-app: $(BINDIR)/$(APP_NAME)
+ifdef BIN_NAME
+app: $(BASEDIR)/$(BIN_NAME)
 
-$(BINDIR)/$(APP_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(APP_NAME)/main.tcl
-	mkdir -p $(BINDIR)
-	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $(APP_NAME) $(DEP_LIBS)
+$(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(APP_DIR)/main.tcl
+	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ $(APP_DIR) $(_EXCLUDES_CSV) $(DEP_LIBS)
 endif
 
 # ==== Standalone interpreters ====
 
-wish: $(BINDIR)/wish
+wish: $(BASEDIR)/wish
 
-$(BINDIR)/wish: $(WISH) $(DEP_STAMPS) $(BUILD_TCL)
-	mkdir -p $(BINDIR)
-	$(TCLSH) $(BUILD_TCL) wish $(BASEDIR) "" $(DEP_LIBS)
+$(BASEDIR)/wish: $(WISH) $(DEP_STAMPS) $(BUILD_TCL)
+	$(TCLSH) $(BUILD_TCL) wish $(BASEDIR) $@ "" "" $(DEP_LIBS)
 
-tclsh: $(BINDIR)/tclsh
+tclsh: $(BASEDIR)/tclsh
 
-$(BINDIR)/tclsh: $(TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
-	mkdir -p $(BINDIR)
-	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) "" $(DEP_LIBS)
+$(BASEDIR)/tclsh: $(TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
+	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" $(DEP_LIBS)
 
 # ==== Clean ====
 
 clean:
-	rm -rf $(BUILDDIR) $(BINDIR)
+	rm -rf $(BUILDDIR)
+ifdef BIN_NAME
+	rm -f $(BASEDIR)/$(BIN_NAME)
+endif
+	rm -f $(BASEDIR)/wish $(BASEDIR)/tclsh
 
 distclean: clean

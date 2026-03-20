@@ -1,15 +1,17 @@
 #!/usr/bin/env tclsh9.0
 #
-# Usage: build.tcl <shell> <basedir> [appname] [libdir ...]
+# Usage: build.tcl <shell> <basedir> <outfile> <appdir> <excludes> [libdir ...]
 #
 #   shell    - "wish" or "tclsh" (selects base interpreter)
-#   basedir  - project root (contains local/, app dir, output)
-#   appname  - app directory name to bundle (empty string for standalone interpreter)
+#   basedir  - project root (contains _build/, app files, output)
+#   outfile  - full path to output binary
+#   appdir   - directory containing app source files (empty string for standalone)
+#   excludes - comma-separated names to skip when copying app files
 #   libdirs  - lib directories to copy into the image
 
 # ==== Parse args ====
-lassign $argv shell baseDir appName
-set libDirs [lrange $argv 3 end]
+lassign $argv shell baseDir outFile appDir excludes
+set libDirs [lrange $argv 5 end]
 
 # ==== Resolve paths ====
 set buildDir [file join $baseDir _build]
@@ -21,11 +23,13 @@ if {$shell eq "tclsh"} {
     set baseInterp [file join $prefix bin wish9.0]
 }
 
-if {$appName ne ""} {
-    set appDir  [file join $baseDir $appName]
-    set outFile [file join $baseDir bin $appName]
-} else {
-    set outFile [file join $baseDir bin $shell]
+# ==== Build exclude set ====
+set excludeSet [list]
+foreach name [split $excludes ,] {
+    set name [string trim $name]
+    if {$name ne ""} {
+        lappend excludeSet $name
+    }
 }
 
 # ==== 1. Create staging dir ====
@@ -56,9 +60,13 @@ if {[llength $libDirs] > 0} {
 }
 
 # ==== 4. Copy app files (main.tcl goes in the root) ====
-if {$appName ne ""} {
+if {$appDir ne ""} {
     foreach f [glob -directory $appDir *] {
-        file copy -force $f [file join $tmpDir [file tail $f]]
+        set tail [file tail $f]
+        if {$tail in $excludeSet} {
+            continue
+        }
+        file copy -force $f [file join $tmpDir $tail]
     }
 }
 

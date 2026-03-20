@@ -14,27 +14,27 @@ Downloads and compiles Tcl, Tk, and selected extensions from source, then packag
 
 ## Quick start
 
-Copy the `zippy` directory into your project root (or add it as a
-`git submodule`).
+Add `zippy` to your project as a directory or `git submodule`.
 
 Create a `Makefile`:
 
 ```makefile
-APP_NAME   := myapp
+BIN_NAME   := myapp
 SHELL_TYPE := wish
 DEPS       := tdom mtls tcllib img
 
 include zippy/zippy.mk
 ```
 
-Create a directory matching your `APP_NAME` and place your code inside it:
+Create a `main.tcl` at the project root:
 
 ```
 myproject/
 ├── Makefile
-├── zippy/
-└── myapp/
-    └── main.tcl
+├── main.tcl
+├── other.tcl
+├── zippy/        (submodule)
+└── ...
 ```
 
 Then run:
@@ -43,9 +43,40 @@ Then run:
 make
 ```
 
-Binaries will be placed under `./bin`.
+The output binary (`./myapp`) is placed at the project root.
 
 ## Configuration
+
+### `BIN_NAME`
+
+Set to produce an app binary. Omit `BIN_NAME` for a standalone
+interpreter.
+
+At runtime, app files are mounted at `//zipfs:/app/`.
+
+### `APP_DIR`
+
+Source directory for app files. Defaults to `.` (project root). Set this to a
+subdirectory if you prefer to keep app code separate: 
+
+```makefile
+BIN_NAME := myapp
+APP_DIR  := src
+```
+
+A `main.tcl` must exist in `APP_DIR` (the
+project root by default). All files in `APP_DIR` are bundled into the zipfs
+image, except for built-in excludes (the zippy directory, `_build/`,
+`Makefile`, and the output binary itself). 
+
+### `APP_EXCLUDE`
+
+Space-separated list of additional file/directory names to exclude from the
+bundle. Built-in excludes are always applied, this adds to them.
+
+```makefile
+APP_EXCLUDE := tests docs .git
+```
 
 ### `SHELL_TYPE`
 
@@ -61,25 +92,16 @@ Optional, any combination of:
 - `img` — additional image format support (requires `wish`)
 - `mtls` — TLS via mbedTLS
 
-### `APP_NAME`
-
-Set to bundle an app directory into the binary. This must be a directory at
-the project root whose name matches the value of `APP_NAME`. All files in
-that directory are bundled into the zipfs image, and `main.tcl` inside it
-is executed on startup. Omit `APP_NAME` for a standalone interpreter.
-
-At runtime, app files are mounted at `//zipfs:/app/`. 
-
 ## Targets
 
-| Target          | Output      | Description                          |
-|-----------------|-------------|--------------------------------------|
-| `make`          | `bin/myapp` | Build the app (if `APP_NAME` is set) |
-| `make wish`     | `bin/wish`  | Standalone wish with selected deps   |
-| `make tclsh`    | `bin/tclsh` | Standalone tclsh with selected deps  |
-| `make download` |             | Download all source tarballs         |
-| `make clean`    |             | Remove `_build/` and `bin/`          |
-| `make distclean`|             | Same as clean                        |
+| Target          | Output    | Description                            |
+|-----------------|-----------|----------------------------------------|
+| `make`          | `./myapp` | Build the app (if `BIN_NAME` is set)   |
+| `make wish`     | `./wish`  | Standalone wish with selected deps     |
+| `make tclsh`    | `./tclsh` | Standalone tclsh with selected deps    |
+| `make download` |           | Download all source tarballs           |
+| `make clean`    |           | Remove `_build/` and built binaries    |
+| `make distclean`|           | Same as clean                          |
 
 ## Standalone interpreter without a Makefile
 
@@ -90,7 +112,7 @@ without creating a project `Makefile`:
 make -f zippy/zippy.mk SHELL_TYPE=tclsh DEPS="tdom mtls" tclsh
 ```
 
-This produces `bin/tclsh` with tdom and mtls baked in.
+This produces `./tclsh` with tdom and mtls baked in.
 
 ## Build parallelism
 
