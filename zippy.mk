@@ -2,10 +2,12 @@
 #
 # User sets these before including:
 #   SHELL_TYPE  := wish | tclsh    (default: wish)
-#   DEPS        := tdom mtls tcllib   (optional, any combination)
+#   DEPS        := tdom mtls tcllib img   (optional, any combination)
 #   BIN_NAME    := myapp           (optional, omit for standalone interpreter)
 #   APP_DIR     := .               (default: project root)
 #   APP_EXCLUDE :=                 (optional, extra excludes: space-separated names)
+#
+# Note: `img` requires Tk and is only valid with SHELL_TYPE=wish (default).
 
 # ==== Paths ====
 ZIPPYDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
@@ -35,6 +37,13 @@ SQLITE3_VER := 3.51.0
 ITCL_VER    := 4.3.5
 TDBC_VER    := 1.1.13
 
+# Img (tkimg). Bundles its own libpng/libjpeg/libtiff/zlib — no system deps.
+IMG_VER       := 2.1.1
+IMG_ZLIB_VER  := 1.3.2
+IMG_PNG_VER   := 1.6.55
+IMG_JPEG_VER  := 10.0.0
+IMG_TIFF_VER  := 4.7.1
+
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
 # of the package name (dir is sqlite3.51.0 for version 3.51.0).
 SQLITE3_DIR_SUFFIX := $(patsubst 3.%,%,$(SQLITE3_VER))
@@ -44,6 +53,7 @@ TCL_TAR    := tcl$(TCL_VER)-src.tar.gz
 TK_TAR     := tk$(TK_VER)-src.tar.gz
 TDOM_TAR   := tdom-latest-src.tar.gz
 TCLLIB_TAR := tcllib-$(TCLLIB_VER).tar.gz
+IMG_TAR    := Img-$(IMG_VER).tar.gz
 
 # ==== URLs ====
 TCL_URL    := http://prdownloads.sourceforge.net/tcl/$(TCL_TAR)
@@ -52,17 +62,20 @@ TDOM_URL   := https://tdom.org/downloads/latest-src.tar.gz
 TCLLIB_URL := https://core.tcl-lang.org/tcllib/uv/$(TCLLIB_TAR)
 MTLS_REPO  := https://github.com/chpock/tclmtls.git
 MTLS_SRC   := $(DEPSDIR)/tclmtls
+IMG_URL    := https://sourceforge.net/projects/tkimg/files/tkimg/2.1/tkimg%202.1.1/$(IMG_TAR)/download
 
 # ==== Checksums ====
 TCL_SHA256    := 2537ba0c86112c8c953f7c09d33f134dd45c0fb3a71f2d7f7691fd301d2c33a6
 TK_SHA256     := bf344efadb618babb7933f69275620f72454d1c8220130da93e3f7feb0efbf9b
 TDOM_SHA256   := 6d24734aef46d1dc16f3476685414794d6a4e65f48079e1029374477104e8319
 TCLLIB_SHA256 := 590263de0832ac801255501d003441a85fb180b8ba96265d50c4a9f92fde2534
+IMG_SHA256    := 0e41efa886c470ca0c38663e66640eb6d89e9e5f746724535ac224e2509ae34f
 
 # ==== Source dirs ====
 TCL_SRC    := $(DEPSDIR)/tcl$(TCL_VER)
 TK_SRC     := $(DEPSDIR)/tk$(TK_VER)
 TCLLIB_SRC := $(DEPSDIR)/tcllib-$(TCLLIB_VER)
+IMG_SRC    := $(DEPSDIR)/Img-$(IMG_VER)
 
 TCLSH := $(PREFIX)/bin/tclsh$(TCL_BVER)
 WISH  := $(PREFIX)/bin/wish$(TK_BVER)
@@ -84,6 +97,13 @@ endif
 ifneq (,$(filter mtls,$(DEPS)))
   DEP_STAMPS += $(PREFIX)/.mtls_installed
   DEP_LIBS += $(wildcard $(PREFIX)/lib/mtls*)
+endif
+ifneq (,$(filter img,$(DEPS)))
+  ifeq ($(SHELL_TYPE),tclsh)
+    $(error img requires Tk; cannot be used with SHELL_TYPE=tclsh)
+  endif
+  DEP_STAMPS += $(PREFIX)/.img_installed
+  DEP_LIBS += $(wildcard $(PREFIX)/lib/Img$(IMG_VER))
 endif
 
 # ==== Tcl/Tk bundled packages ====
@@ -111,11 +131,16 @@ ifneq (,$(filter mtls,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_MTLS
   KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/mtls*/libtcl9mtls*.a)
 endif
+ifneq (,$(filter img,$(DEPS)))
+  KITSH_DEP_FLAGS += -DWITH_IMG
+  KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/Img$(IMG_VER)/libtcl9*.a)
+endif
 
 KITSH_TCL_LIBS = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
     $(PREFIX)/lib/libtcl9.0.a $(PREFIX)/lib/libtclstub.a
 KITSH_TK_LIBS  = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
-    $(PREFIX)/lib/libtcl9tk$(TK_BVER).a $(PREFIX)/lib/libtcl9.0.a $(PREFIX)/lib/libtclstub.a
+    $(PREFIX)/lib/libtcl9tk$(TK_BVER).a $(PREFIX)/lib/libtcl9.0.a \
+    $(PREFIX)/lib/libtkstub.a $(PREFIX)/lib/libtclstub.a
 KITSH_CFLAGS      := -I$(PREFIX)/include
 KITSH_SYSLIBS     := -lpthread -ldl -lz -lm
 # Tk 9 statically pulls in X11, Xft/fontconfig and Xss (XScreenSaver).
@@ -187,7 +212,12 @@ $(MTLS_SRC):
 	git clone $(MTLS_REPO) $(MTLS_SRC)
 	cd $(MTLS_SRC) && git checkout $(MTLS_COMMIT) && git submodule update --init --recursive
 
-download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC)
+$(DEPSDIR)/$(IMG_TAR):
+	mkdir -p $(DEPSDIR)
+	curl -L -o $@ "$(IMG_URL)"
+	echo "$(IMG_SHA256)  $@" | sha256sum -c
+
+download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(DEPSDIR)/$(IMG_TAR)
 
 # ==== Extract ====
 
@@ -204,6 +234,10 @@ $(TCLLIB_SRC): $(DEPSDIR)/$(TCLLIB_TAR)
 	touch $@
 
 $(DEPSDIR)/.tdom_extracted: $(DEPSDIR)/$(TDOM_TAR)
+	tar xzf $< -C $(DEPSDIR)
+	touch $@
+
+$(IMG_SRC): $(DEPSDIR)/$(IMG_TAR)
 	tar xzf $< -C $(DEPSDIR)
 	touch $@
 
@@ -247,6 +281,28 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH)
 		../configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
+	touch $@
+
+# Img: configure with --disable-shared builds .a files but its `make install`
+# target only assembles the umbrella pkgIndex.tcl in shared builds. We install
+# manually: copy the .a files into Img$(IMG_VER)/ and emit a pkgIndex.tcl that
+# resolves every sub-package via `load {} <Prefix>` — wired to the
+# Tcl_StaticPackage entries in kitsh.c.
+IMG_PKGINDEX_TCL := $(ZIPPYDIR)/img_pkgindex.tcl
+
+$(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
+	mkdir -p $(IMG_SRC)/build
+	cd $(IMG_SRC)/build && \
+		../configure --prefix=$(PREFIX) \
+			--with-tcl=$(PREFIX)/lib --with-tk=$(PREFIX)/lib \
+			--disable-shared && \
+		$(MAKE) -j$(NPROC)
+	rm -rf $(PREFIX)/lib/Img$(IMG_VER)
+	mkdir -p $(PREFIX)/lib/Img$(IMG_VER)
+	find $(IMG_SRC)/build -name 'libtcl9*.a' -exec cp {} $(PREFIX)/lib/Img$(IMG_VER)/ \;
+	$(TCLSH) $(IMG_PKGINDEX_TCL) \
+		$(PREFIX)/lib/Img$(IMG_VER)/pkgIndex.tcl \
+		$(IMG_VER) $(IMG_ZLIB_VER) $(IMG_PNG_VER) $(IMG_JPEG_VER) $(IMG_TIFF_VER)
 	touch $@
 
 # ==== KITSH launcher ====

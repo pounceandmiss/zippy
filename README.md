@@ -90,6 +90,7 @@ Optional, any combination of:
 - `tdom` — XML/HTML parsing
 - `tcllib` — standard Tcl library collection
 - `mtls` — TLS via mbedTLS
+- `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps.
 
 ## Targets
 

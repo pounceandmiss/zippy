@@ -11,6 +11,39 @@
 #                 linked packages registered via Tcl_StaticPackage in kitsh.c
 #   libdirs     - lib directories to copy into the image
 
+# ==== Helpers ====
+
+proc readFile {path} {
+    set fd [open $path r]
+    try {
+        return [read $fd]
+    } finally {
+        close $fd
+    }
+}
+
+proc writeFile {path content} {
+    set fd [open $path w]
+    try {
+        puts -nonewline $fd $content
+    } finally {
+        close $fd
+    }
+}
+
+# Rewrite `load [file join $dir foo.so] Foo` to `load {} Foo` in a pkgIndex.tcl,
+# so the package resolves through Tcl_StaticPackage entries registered in
+# kitsh.c instead of trying to dlopen a non-existent shared library. Returns
+# 1 if the file was patched, 0 if no matching load lines were found.
+proc patchPkgIndexLoadPaths {pkgIndex} {
+    set content [readFile $pkgIndex]
+    set hits [regsub -all {\[file join \$dir [^\]]+\.(?:so|dll|dylib)\]} \
+        $content {{}} content]
+    if {$hits == 0} { return 0 }
+    writeFile $pkgIndex $content
+    return 1
+}
+
 # ==== Parse args ====
 lassign $argv shell baseDir outFile appDir excludes staticPkgs
 set libDirs [lrange $argv 6 end]
@@ -70,32 +103,22 @@ if {[file exists $initFile]} {
 }
 
 # ==== 3. Copy extension libraries ====
-# Pass 1: copy each libDir, strip native libs, patch its pkgIndex.tcl so
-# `load [file join $dir foo.so] Foo` becomes `load {} Foo` — which resolves
-# through Tcl_StaticPackage entries registered in kitsh.c.
+# Pass 1: for each libDir, copy it into the staging tree, strip the binary
+# libs (they're not loadable from a zipfs and just bloat the image), and
+# patch its pkgIndex.tcl to route `load` through Tcl_StaticPackage.
 set patchedDirs [list]
 if {[llength $libDirs] > 0} {
     file mkdir [file join $tmpDir lib]
     foreach dir $libDirs {
-        if {[file isdirectory $dir]} {
-            set destDir [file join $tmpDir lib [file tail $dir]]
-            file copy -force $dir $destDir
-            foreach soFile [glob -nocomplain -directory $destDir *.so *.dll *.dylib] {
-                file delete $soFile
-            }
-            set idx [file join $destDir pkgIndex.tcl]
-            if {[file exists $idx]} {
-                set fd [open $idx r]
-                set content [read $fd]
-                close $fd
-                if {[regsub -all {\[file join \$dir [^\]]+\.(?:so|dll|dylib)\]} \
-                        $content {{}} content]} {
-                    set fd [open $idx w]
-                    puts -nonewline $fd $content
-                    close $fd
-                    lappend patchedDirs [string tolower [file tail $dir]]
-                }
-            }
+        if {![file isdirectory $dir]} continue
+        set destDir [file join $tmpDir lib [file tail $dir]]
+        file copy -force $dir $destDir
+        foreach binFile [glob -nocomplain -directory $destDir *.so *.dll *.dylib *.a] {
+            file delete $binFile
+        }
+        set pkgIndex [file join $destDir pkgIndex.tcl]
+        if {[file exists $pkgIndex] && [patchPkgIndexLoadPaths $pkgIndex]} {
+            lappend patchedDirs [string tolower [file tail $dir]]
         }
     }
 }
@@ -121,12 +144,12 @@ foreach spec [split $staticPkgs ,] {
 if {[llength $staticList] > 0} {
     set staticDir [file join $tmpDir lib zippy_statics]
     file mkdir $staticDir
-    set fd [open [file join $staticDir pkgIndex.tcl] w]
+    set entries [list]
     foreach spec $staticList {
         lassign [split $spec :] pkg loadName version
-        puts $fd [list package ifneeded $pkg $version [list load {} $loadName]]
+        lappend entries [list package ifneeded $pkg $version [list load {} $loadName]]
     }
-    close $fd
+    writeFile [file join $staticDir pkgIndex.tcl] [join $entries \n]\n
 }
 
 # ==== 4. Copy app files (main.tcl goes in the root) ====
