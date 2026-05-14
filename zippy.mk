@@ -184,7 +184,7 @@ else
   .DEFAULT_GOAL := $(SHELL_TYPE)
 endif
 
-.PHONY: app wish tclsh download clean distclean
+.PHONY: app wish tclsh download test clean distclean
 
 # ==== Download ====
 
@@ -337,6 +337,13 @@ tclsh: $(BASEDIR)/tclsh
 
 $(BASEDIR)/tclsh: $(KITSH_TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
 	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+
+# ==== Test ====
+# Smoke test that builds standalone tclsh/wish across DEPS combinations and
+# asserts each works end-to-end. Depends on $(TCLSH)/$(WISH) so the Tcl/Tk
+# bootstrap is done before the per-case rebuilds.
+test: $(TCLSH) $(WISH)
+	$(ZIPPYDIR)/tests/smoke.sh
 
 # ==== Clean ====
 

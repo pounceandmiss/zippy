@@ -100,6 +100,7 @@ Optional, any combination of:
 | `make wish`     | `./wish`  | Standalone wish with selected deps     |
 | `make tclsh`    | `./tclsh` | Standalone tclsh with selected deps    |
 | `make download` |           | Download all source tarballs           |
+| `make test`     |           | Run the integration smoke test         |
 | `make clean`    |           | Remove `_build/` and built binaries    |
 | `make distclean`|           | Same as clean                          |
 
@@ -121,3 +122,13 @@ Each build step uses all available cores by default. Override with:
 ```
 make NPROC=8
 ```
+
+## Tests
+
+To run a smoke test that builds wish with all dependencies and exercises each:
+
+```
+make -f zippy.mk test
+```
+
+See `tests/smoke.sh` for the assertions.
