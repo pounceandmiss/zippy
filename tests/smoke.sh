@@ -15,7 +15,7 @@ if [[ -z "${DISPLAY:-}" ]]; then
     exit 0
 fi
 
-DEPS="tdom mtls tcllib img"
+DEPS="tdom mtls tcllib img rtc rtcma"
 PASS=0 FAIL=0
 BUILDLOG=$(mktemp)
 PNG_FILE=$(mktemp --suffix=.png)
@@ -70,6 +70,10 @@ if {[$n nodeValue] eq "hi"} {puts OK}
 exit'
 
 assert "mtls" 'package require mtls; puts OK; exit'
+
+assert "rtc" 'package require rtc; puts OK; exit'
+
+assert "rtcma" 'package require rtcma; puts OK; exit'
 
 assert "tcllib json" 'package require json
 if {[json::json2dict {{"a":1}}] eq "a 1"} {puts OK}

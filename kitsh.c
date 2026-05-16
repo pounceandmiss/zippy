@@ -11,6 +11,12 @@ extern int Tdom_Init(Tcl_Interp *);
 #ifdef WITH_MTLS
 extern int Mtls_Init(Tcl_Interp *);
 #endif
+#ifdef WITH_RTC
+extern int Rtc_Init(Tcl_Interp *);
+#endif
+#ifdef WITH_RTCMA
+extern int Rtcma_Init(Tcl_Interp *);
+#endif
 #ifdef WITH_IMG
 extern int Tkimg_Init(Tcl_Interp *);
 extern int Zlibtcl_Init(Tcl_Interp *);
@@ -54,6 +60,12 @@ int main(int argc, char **argv) {
 #endif
 #ifdef WITH_MTLS
     Tcl_StaticPackage(0, "Mtls",    Mtls_Init,    NULL);
+#endif
+#ifdef WITH_RTC
+    Tcl_StaticPackage(0, "Rtc", Rtc_Init, NULL);
+#endif
+#ifdef WITH_RTCMA
+    Tcl_StaticPackage(0, "Rtcma", Rtcma_Init, NULL);
 #endif
 #ifdef WITH_IMG
     Tcl_StaticPackage(0, "Tkimg",       Tkimg_Init,       NULL);

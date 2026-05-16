@@ -44,6 +44,24 @@ IMG_PNG_VER   := 1.6.55
 IMG_JPEG_VER  := 10.0.0
 IMG_TIFF_VER  := 4.7.1
 
+# Rtc (libdatachannel-tcl). C++ Tcl 9 binding for libdatachannel, cloned
+# from GitHub; built via cmake with RTC_BUNDLE_DEPS=ON so
+# libdatachannel/mbedtls fold in as static archives alongside the binding.
+RTC_VER    := 0.1.0
+RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
+RTC_COMMIT := fc623e5272604788ef1309ff31adb9fa1a8053d1
+RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
+
+# Rtcma (rtc-ma). Audio-over-libdatachannel adapter (miniaudio + opus +
+# jitter buffer + SDP) with its own Tcl 9 binding, cloned from GitHub.
+# Built via cmake with RTCMA_BUNDLE_OPUS=ON only — libdatachannel and
+# mbedtls are *not* rebuilt, they're consumed from rtc's vendor prefix,
+# which is why `rtc` must also be in DEPS (enforced below).
+RTCMA_VER    := 0.1.0
+RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
+RTCMA_COMMIT := 0dfd8ce39f58311a5b6d98e3ba7bea4e1526dd29
+RTCMA_SRC    := $(DEPSDIR)/rtc-ma
+
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
 # of the package name (dir is sqlite3.51.0 for version 3.51.0).
 SQLITE3_DIR_SUFFIX := $(patsubst 3.%,%,$(SQLITE3_VER))
@@ -105,6 +123,48 @@ ifneq (,$(filter img,$(DEPS)))
   DEP_STAMPS += $(PREFIX)/.img_installed
   DEP_LIBS += $(wildcard $(PREFIX)/lib/Img$(IMG_VER))
 endif
+ifneq (,$(filter rtc,$(DEPS)))
+  DEP_STAMPS += $(PREFIX)/.rtc_installed
+  # No DEP_LIBS entry: rtc is fully static-linked into the kitsh binary,
+  # so nothing needs to land in the zipfs lib tree — STATIC_PKGS below
+  # generates the synthetic pkgIndex.tcl.
+endif
+ifneq (,$(filter rtcma,$(DEPS)))
+  # rtcma consumes libdatachannel + mbedtls from rtc's vendor prefix (the
+  # rtc-ma build is invoked with RTCMA_BUNDLE_OPUS=ON only — see recipe
+  # below — so its own bundle contains just opus). That means rtc must
+  # be enabled too, otherwise rtcma's find_package(LibDataChannel) has
+  # nothing to resolve against.
+  ifeq (,$(filter rtc,$(DEPS)))
+    $(error rtcma requires rtc — add rtc to DEPS)
+  endif
+  DEP_STAMPS += $(PREFIX)/.rtcma_installed
+  # Same as rtc: fully static-linked, no zipfs lib entry.
+endif
+
+# When both mtls and rtc are enabled, point tclmtls at libdatachannel-tcl's
+# bundled mbedtls so we don't link two copies (different patch versions, both
+# exporting the same mbedtls_* symbols → multiple-definition). In this mode
+# tclmtls's archive references the mbedtls symbols instead of baking them in;
+# the kitsh link already includes $(RTC_BUILD)/vendor/lib/*.a.
+#
+# Also propagate the same MBEDTLS_USER_CONFIG_FILE to tclmtls's compile.
+# Without it, tclmtls's backend-mbedtls.c sees mbedtls headers with
+# MBEDTLS_SSL_DTLS_SRTP undefined while libmbedtls.a was built with it set —
+# mbedtls_ssl_config/_context struct layouts diverge and f_rng lands at a
+# different offset for caller vs callee, NULL-deref'ing in client_hello.
+#
+# rtcma is irrelevant here: its build consumes libdatachannel/mbedtls from
+# rtc's vendor, it doesn't produce its own.
+MTLS_EXTRA_CONFIG :=
+MTLS_EXTRA_DEPS   :=
+ifneq (,$(filter mtls,$(DEPS)))
+  ifneq (,$(filter rtc,$(DEPS)))
+    MTLS_EXTRA_CONFIG := --with-mbedtls=$(BUILDDIR)/rtc/vendor \
+        CPPFLAGS='-DMBEDTLS_USER_CONFIG_FILE=\"$(RTC_SRC)/cmake/mbedtls-user-config.h\"'
+    MTLS_EXTRA_DEPS   := $(PREFIX)/.rtc_installed
+  endif
+endif
 
 # ==== Tcl/Tk bundled packages ====
 # Exclude itcl/tdbc family (not zippy deps) and internal dirs
@@ -134,6 +194,50 @@ endif
 ifneq (,$(filter img,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_IMG
   KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/Img$(IMG_VER)/libtcl9*.a)
+endif
+
+# Linker driver — gcc by default. Rtc / rtcma (C++) flip us to g++ +
+# static libstdc++; -xc keeps kitsh.c itself compiled as C so the existing
+# C-linkage `extern int <Pkg>_Init(Tcl_Interp *)` decls still match.
+KITSH_LD              := gcc
+KITSH_KITSH_LANG      :=
+KITSH_KITSH_LANG_END  :=
+KITSH_EXTRA_LDFLAGS   :=
+
+# rtc owns libdatachannel + mbedtls (both bundled in $(RTC_BUILD)/vendor).
+# rtcma reuses those — see its recipe below for the
+# RTCMA_BUNDLE_OPUS=ON / CMAKE_PREFIX_PATH=$(RTC_BUILD)/vendor invocation.
+# So at kitsh-link time:
+#   - rtc contributes librtc_tcl.a + the full vendor archive set
+#     (libdatachannel + juice + srtp2 + usrsctp + mbed{tls,crypto,x509}).
+#   - rtcma contributes librtcma_tcl.a + librtcma.a + just libopus.a
+#     from its own vendor (the only thing it actually bundles).
+ifneq (,$(filter rtc,$(DEPS)))
+  RTC_BUILD := $(BUILDDIR)/rtc
+  KITSH_DEP_FLAGS += -DWITH_RTC
+  KITSH_DEP_LIBS  += \
+      $(RTC_BUILD)/tcl/librtc_tcl.a \
+      $(wildcard $(RTC_BUILD)/vendor/lib/*.a)
+endif
+ifneq (,$(filter rtcma,$(DEPS)))
+  RTCMA_BUILD := $(BUILDDIR)/rtcma
+  KITSH_DEP_FLAGS += -DWITH_RTCMA
+  KITSH_DEP_LIBS  += \
+      $(RTCMA_BUILD)/tcl/librtcma_tcl.a \
+      $(RTCMA_BUILD)/librtcma.a \
+      $(wildcard $(RTCMA_BUILD)/vendor/lib/libopus*.a)
+endif
+
+# C++ link driver toggle: triggered by any libdatachannel-based dep.
+ifneq (,$(filter rtc rtcma,$(DEPS)))
+  KITSH_LD := g++
+  # -xc forces g++ to treat kitsh.c as C (preserving C linkage on the
+  # `extern int <Pkg>_Init(...)` decls); -xnone resets so the trailing
+  # .a archives aren't compiled as C source.
+  KITSH_KITSH_LANG := -xc
+  KITSH_KITSH_LANG_END := -xnone
+  # See BundleDeps.cmake: fold libstdc++ static; leave libgcc_s dynamic.
+  KITSH_EXTRA_LDFLAGS := -static-libstdc++
 endif
 
 KITSH_TCL_LIBS = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
@@ -175,6 +279,12 @@ endif
 ifneq (,$(filter mtls,$(DEPS)))
   STATIC_PKGS += mtls:Mtls:$(MTLS_VER)
 endif
+ifneq (,$(filter rtc,$(DEPS)))
+  STATIC_PKGS += rtc:Rtc:$(RTC_VER)
+endif
+ifneq (,$(filter rtcma,$(DEPS)))
+  STATIC_PKGS += rtcma:Rtcma:$(RTCMA_VER)
+endif
 _STATIC_PKGS_CSV := $(subst $(eval ) ,$(shell echo ','),$(STATIC_PKGS))
 
 # ==== Default target ====
@@ -212,12 +322,20 @@ $(MTLS_SRC):
 	git clone $(MTLS_REPO) $(MTLS_SRC)
 	cd $(MTLS_SRC) && git checkout $(MTLS_COMMIT) && git submodule update --init --recursive
 
+$(RTC_SRC):
+	git clone $(RTC_REPO) $(RTC_SRC)
+	cd $(RTC_SRC) && git checkout $(RTC_COMMIT) && git submodule update --init --recursive
+
+$(RTCMA_SRC):
+	git clone $(RTCMA_REPO) $(RTCMA_SRC)
+	cd $(RTCMA_SRC) && git checkout $(RTCMA_COMMIT) && git submodule update --init --recursive
+
 $(DEPSDIR)/$(IMG_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ "$(IMG_URL)"
 	echo "$(IMG_SHA256)  $@" | sha256sum -c
 
-download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(DEPSDIR)/$(IMG_TAR)
+download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(RTC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(IMG_TAR)
 
 # ==== Extract ====
 
@@ -275,10 +393,10 @@ $(PREFIX)/.tcllib_installed: $(TCLLIB_SRC) $(TCLSH)
 		$(MAKE) install
 	touch $@
 
-$(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH)
+$(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(MTLS_EXTRA_DEPS)
 	mkdir -p $(MTLS_SRC)/build
 	cd $(MTLS_SRC)/build && \
-		../configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
+		../configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared $(MTLS_EXTRA_CONFIG) && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	touch $@
@@ -305,17 +423,57 @@ $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 		$(IMG_VER) $(IMG_ZLIB_VER) $(IMG_PNG_VER) $(IMG_JPEG_VER) $(IMG_TIFF_VER)
 	touch $@
 
+# Rtc: out-of-tree cmake build against a local libdatachannel-tcl source dir.
+# BUNDLE_DEPS rebuilds mbedtls/libdatachannel into static archives inside the
+# build tree's vendor/lib; the tcl/ subdir's rtc_tcl_static target emits
+# librtc_tcl.a (the Tcl 9 extension archive whose Rtc_Init we wire into
+# kitsh.c via Tcl_StaticPackage).
+$(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC)
+	cmake -S $(RTC_SRC) -B $(BUILDDIR)/rtc \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DRTC_BUNDLE_DEPS=ON \
+		-DCMAKE_PREFIX_PATH=$(PREFIX)
+	cmake --build $(BUILDDIR)/rtc -j$(NPROC)
+	mkdir -p $(PREFIX)
+	touch $@
+
+# Rtcma: out-of-tree cmake build. RTCMA_BUNDLE_OPUS=ON builds opus from
+# source into the build tree's vendor/ prefix; libdatachannel and mbedtls
+# are *not* rebuilt — rtcma's find_package(LibDataChannel) resolves
+# against rtc's vendor install (see CMAKE_PREFIX_PATH). RTCMA_BUILD_TCL=ON
+# pulls in tcl/CMakeLists.txt, which emits librtcma_tcl.a (the Tcl 9
+# extension archive whose Rtcma_Init we wire into kitsh.c via
+# Tcl_StaticPackage) alongside librtcma.a (the audio adapter library
+# itself).
+#
+# The order-only dependency on .rtc_installed makes sure rtc's vendor
+# install exists before rtcma's configure runs; the DEP_STAMPS block
+# above already errors out at make-parse time if rtc isn't in DEPS.
+$(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(PREFIX)/.rtc_installed
+	cmake -S $(RTCMA_SRC) -B $(BUILDDIR)/rtcma \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DRTCMA_BUNDLE_OPUS=ON \
+		-DRTCMA_BUILD_TCL=ON \
+		-DLibDataChannel_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/LibDataChannel \
+		-DMbedTLS_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/MbedTLS \
+		-DCMAKE_PREFIX_PATH='$(PREFIX);$(BUILDDIR)/rtc/vendor'
+	cmake --build $(BUILDDIR)/rtcma -j$(NPROC)
+	mkdir -p $(PREFIX)
+	touch $@
+
 # ==== KITSH launcher ====
 
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
-	gcc $(KITSH_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $< \
+	$(KITSH_LD) $(KITSH_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TCL_LIBS) -Wl,--end-group \
-		$(KITSH_SYSLIBS)
+		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS)
 
 $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
-	gcc $(KITSH_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $< \
+	$(KITSH_LD) $(KITSH_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TK_LIBS) -Wl,--end-group \
-		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS)
+		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS)
 
 # ==== App ====
 

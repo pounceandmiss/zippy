@@ -7,10 +7,12 @@ Downloads and compiles Tcl, Tk, and selected extensions from source, then packag
 ## Prerequisites
 
 - C compiler (gcc/clang)
+- C++ compiler (g++, required for `rtc`/`rtcma`)
 - make
+- cmake (required for `rtc`/`rtcma`)
 - curl
 - zip (required for Tk build)
-- git (for tclmtls)
+- git (for `mtls`, `rtc`, `rtcma`)
 
 ## Quick start
 
@@ -57,7 +59,7 @@ At runtime, app files are mounted at `//zipfs:/app/`.
 ### `APP_DIR`
 
 Source directory for app files. Defaults to `.` (project root). Set this to a
-subdirectory if you prefer to keep app code separate: 
+subdirectory if you prefer to keep app code separate:
 
 ```makefile
 BIN_NAME := myapp
@@ -67,12 +69,12 @@ APP_DIR  := src
 A `main.tcl` must exist in `APP_DIR` (the
 project root by default). All files in `APP_DIR` are bundled into the zipfs
 image, except for built-in excludes (the zippy directory, `_build/`,
-`Makefile`, and the output binary itself). 
+`Makefile`, and the output binary itself).
 
 ### `APP_EXCLUDE`
 
 Space-separated list of additional file/directory names to exclude from the
-bundle. Built-in excludes are always applied, this adds to them.
+bundle. Built-in excludes are always applied; this adds to them.
 
 ```makefile
 APP_EXCLUDE := tests docs .git
@@ -91,6 +93,8 @@ Optional, any combination of:
 - `tcllib` — standard Tcl library collection
 - `mtls` — TLS via mbedTLS
 - `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps.
+- `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. When combined with `mtls`, tclmtls is configured with `--with-mbedtls=` pointing at the rtc vendor prefix so both share a single mbedtls (avoids duplicate-symbol link errors).
+- `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too: rtcma consumes libdatachannel and mbedtls from rtc's vendor prefix instead of rebuilding them.
 
 ## Targets
 
@@ -128,7 +132,7 @@ make NPROC=8
 To run a smoke test that builds wish with all dependencies and exercises each:
 
 ```
-make -f zippy.mk test
+make -C zippy -f zippy.mk test
 ```
 
 See `tests/smoke.sh` for the assertions.
