@@ -7,12 +7,18 @@
 #   APP_DIR     := .               (default: project root)
 #   APP_EXCLUDE :=                 (optional, extra excludes: space-separated names)
 #   STRIP       := 1 | 0           (default: 1 — strip symbols, save .debug sidecar)
+#   GC_SECTIONS := 1 | 0           (default: 1 — drop unreferenced code at link)
 #
 # Note: `img` requires Tk and is only valid with SHELL_TYPE=wish (default).
 #
 # When STRIP=1 (default), the shipped binary has debug symbols removed and a
 # matching <binary>.debug sidecar is written next to it. Symbolize a crash with
 # `addr2line -e <binary>.debug 0x...` or `gdb <binary>.debug core`.
+#
+# When GC_SECTIONS=1 (default), every dep is compiled with -ffunction-sections
+# -fdata-sections and the kitsh link uses -Wl,--gc-sections so unreferenced
+# code/data gets dropped. Changing the flag requires `make clean` (the per-
+# section granularity is baked into the static archives at compile time).
 
 # ==== Paths ====
 ZIPPYDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
@@ -22,9 +28,10 @@ PREFIX       := $(BUILDDIR)/local
 DEPSDIR      := $(BUILDDIR)/deps
 BUILD_TCL    := $(ZIPPYDIR)/build.tcl
 
-SHELL_TYPE ?= wish
-APP_DIR    ?= .
-STRIP      ?= 1
+SHELL_TYPE  ?= wish
+APP_DIR     ?= .
+STRIP       ?= 1
+GC_SECTIONS ?= 1
 
 # ==== Versions ====
 TCL_VER    := 9.0.3
@@ -105,6 +112,19 @@ TCLSH := $(PREFIX)/bin/tclsh$(TCL_BVER)
 WISH  := $(PREFIX)/bin/wish$(TK_BVER)
 
 NPROC := $(shell nproc 2>/dev/null || echo 4)
+
+# Size optimization: emit per-function/data sections in every dep so the kitsh
+# link can drop unreferenced ones with --gc-sections. Both halves are needed —
+# the flag on the link alone does nothing if the static archives were compiled
+# without per-section granularity. When GC_SECTIONS=0 these vars are empty and
+# the CFLAGS=/CMAKE_C_FLAGS= insertions in the recipes become no-ops.
+ifeq ($(GC_SECTIONS),1)
+  SIZE_CFLAGS  := -ffunction-sections -fdata-sections
+  SIZE_LDFLAGS := -Wl,--gc-sections
+else
+  SIZE_CFLAGS  :=
+  SIZE_LDFLAGS :=
+endif
 
 # ==== Dependency mapping ====
 DEP_STAMPS :=
@@ -369,6 +389,7 @@ $(IMG_SRC): $(DEPSDIR)/$(IMG_TAR)
 
 $(TCLSH): $(TCL_SRC)
 	cd $(TCL_SRC)/unix && \
+		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --prefix=$(PREFIX) --enable-zipfs --disable-shared --with-system-libtommath=no && \
 		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
@@ -378,6 +399,7 @@ $(TCLSH): $(TCL_SRC)
 
 $(WISH): $(TK_SRC) $(TCLSH)
 	cd $(TK_SRC)/unix && \
+		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --enable-zipfs --disable-shared --disable-libcups && \
 		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
@@ -388,6 +410,7 @@ $(WISH): $(TK_SRC) $(TCLSH)
 
 $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
 	cd $$(ls -d $(DEPSDIR)/tdom-*/) && \
+		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
@@ -402,6 +425,7 @@ $(PREFIX)/.tcllib_installed: $(TCLLIB_SRC) $(TCLSH)
 $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(MTLS_EXTRA_DEPS)
 	mkdir -p $(MTLS_SRC)/build
 	cd $(MTLS_SRC)/build && \
+		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		../configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared $(MTLS_EXTRA_CONFIG) && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
@@ -417,6 +441,7 @@ IMG_PKGINDEX_TCL := $(ZIPPYDIR)/img_pkgindex.tcl
 $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 	mkdir -p $(IMG_SRC)/build
 	cd $(IMG_SRC)/build && \
+		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		../configure --prefix=$(PREFIX) \
 			--with-tcl=$(PREFIX)/lib --with-tk=$(PREFIX)/lib \
 			--disable-shared && \
@@ -439,6 +464,8 @@ $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC)
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTC_BUNDLE_DEPS=ON \
+		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(SIZE_CFLAGS)" \
 		-DCMAKE_PREFIX_PATH=$(PREFIX)
 	cmake --build $(BUILDDIR)/rtc -j$(NPROC)
 	mkdir -p $(PREFIX)
@@ -462,6 +489,8 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(PREFIX)/.rtc_installed
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTCMA_BUNDLE_OPUS=ON \
 		-DRTCMA_BUILD_TCL=ON \
+		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(SIZE_CFLAGS)" \
 		-DLibDataChannel_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/LibDataChannel \
 		-DMbedTLS_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/MbedTLS \
 		-DCMAKE_PREFIX_PATH='$(PREFIX);$(BUILDDIR)/rtc/vendor'
@@ -480,15 +509,15 @@ $(if $(filter 1,$(STRIP)),objcopy --only-keep-debug $(1) $(1).debug && strip -s 
 endef
 
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
-	$(KITSH_LD) $(KITSH_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
+	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TCL_LIBS) -Wl,--end-group \
-		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS)
+		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)
 
 $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
-	$(KITSH_LD) $(KITSH_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
+	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TK_LIBS) -Wl,--end-group \
-		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS)
+		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)
 
 # ==== App ====
