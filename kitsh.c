@@ -103,6 +103,11 @@ static int AppInit(Tcl_Interp *interp) {
 }
 
 int main(int argc, char **argv) {
+    /* Mounts the appended zip at //zipfs:/app and, if //zipfs:/app/main.tcl
+     * exists, registers it as the startup script. Without this the launcher
+     * falls through to Tk_Main's default REPL + empty toplevel. */
+    TclZipfs_AppHook(&argc, &argv);
+
     Tcl_StaticPackage(0, "Thread",  Thread_Init,  NULL);
     Tcl_StaticPackage(0, "Sqlite3", Sqlite3_Init, NULL);
 #ifdef WITH_TDOM
