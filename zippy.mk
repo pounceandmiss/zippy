@@ -59,7 +59,7 @@ RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 # which is why `rtc` must also be in DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 0dfd8ce39f58311a5b6d98e3ba7bea4e1526dd29
+RTCMA_COMMIT := 018b91682d60199b043d3f9ae3712acfdd7993b2
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma
 
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
