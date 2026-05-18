@@ -6,8 +6,13 @@
 #   BIN_NAME    := myapp           (optional, omit for standalone interpreter)
 #   APP_DIR     := .               (default: project root)
 #   APP_EXCLUDE :=                 (optional, extra excludes: space-separated names)
+#   STRIP       := 1 | 0           (default: 1 — strip symbols, save .debug sidecar)
 #
 # Note: `img` requires Tk and is only valid with SHELL_TYPE=wish (default).
+#
+# When STRIP=1 (default), the shipped binary has debug symbols removed and a
+# matching <binary>.debug sidecar is written next to it. Symbolize a crash with
+# `addr2line -e <binary>.debug 0x...` or `gdb <binary>.debug core`.
 
 # ==== Paths ====
 ZIPPYDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
@@ -19,6 +24,7 @@ BUILD_TCL    := $(ZIPPYDIR)/build.tcl
 
 SHELL_TYPE ?= wish
 APP_DIR    ?= .
+STRIP      ?= 1
 
 # ==== Versions ====
 TCL_VER    := 9.0.3
@@ -465,23 +471,40 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(PREFIX)/.rtc_installed
 
 # ==== KITSH launcher ====
 
+# Strip the kitsh launcher and stash debug info to a sidecar. Has to run here,
+# before build.tcl appends the zipfs payload — strip rewrites ELF section
+# layout, which would invalidate the absolute offsets in the appended ZIP
+# central directory. The sidecar is later copied next to the shipped binary.
+define maybe_strip_kitsh
+$(if $(filter 1,$(STRIP)),objcopy --only-keep-debug $(1) $(1).debug && strip -s $(1),true)
+endef
+
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TCL_LIBS) -Wl,--end-group \
 		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS)
+	$(call maybe_strip_kitsh,$@)
 
 $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
 	$(KITSH_LD) $(KITSH_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TK_LIBS) -Wl,--end-group \
 		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS)
+	$(call maybe_strip_kitsh,$@)
 
 # ==== App ====
+
+# Place the kitsh launcher's .debug sidecar next to the shipped binary so a
+# crash address can be resolved with `addr2line -e <binary>.debug 0x...`.
+define maybe_copy_debug
+$(if $(filter 1,$(STRIP)),cp $(1).debug $(2).debug,true)
+endef
 
 ifdef BIN_NAME
 app: $(BASEDIR)/$(BIN_NAME)
 
 $(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(APP_DIR)/main.tcl
 	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ $(APP_DIR) $(_EXCLUDES_CSV) $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(call maybe_copy_debug,$(BASE_INTERP),$@)
 endif
 
 # ==== Standalone interpreters ====
@@ -490,11 +513,13 @@ wish: $(BASEDIR)/wish
 
 $(BASEDIR)/wish: $(KITSH_WISH) $(DEP_STAMPS) $(BUILD_TCL)
 	$(TCLSH) $(BUILD_TCL) wish $(BASEDIR) $@ "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(call maybe_copy_debug,$(KITSH_WISH),$@)
 
 tclsh: $(BASEDIR)/tclsh
 
 $(BASEDIR)/tclsh: $(KITSH_TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
 	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(call maybe_copy_debug,$(KITSH_TCLSH),$@)
 
 # ==== Test ====
 # Smoke test that builds standalone tclsh/wish across DEPS combinations and
@@ -508,8 +533,8 @@ test: $(TCLSH) $(WISH)
 clean:
 	rm -rf $(BUILDDIR)
 ifdef BIN_NAME
-	rm -f $(BASEDIR)/$(BIN_NAME)
+	rm -f $(BASEDIR)/$(BIN_NAME) $(BASEDIR)/$(BIN_NAME).debug
 endif
-	rm -f $(BASEDIR)/wish $(BASEDIR)/tclsh
+	rm -f $(BASEDIR)/wish $(BASEDIR)/wish.debug $(BASEDIR)/tclsh $(BASEDIR)/tclsh.debug
 
 distclean: clean
