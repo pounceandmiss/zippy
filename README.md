@@ -96,6 +96,16 @@ Optional, any combination of:
 - `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. When combined with `mtls`, tclmtls is configured with `--with-mbedtls=` pointing at the rtc vendor prefix so both share a single mbedtls (avoids duplicate-symbol link errors).
 - `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too: rtcma consumes libdatachannel and mbedtls from rtc's vendor prefix instead of rebuilding them.
 
+### `TCLLIB_INCLUDE`
+
+Whitelist of tcllib submodules to bundle. Unset = ship all of tcllib.
+
+```makefile
+TCLLIB_INCLUDE := math base64 json
+```
+
+Transitive deps are not auto-resolved (list them yourself), and `package require tcllib` stops working in whitelist mode — require the specific submodules.
+
 ### `STRIP`
 
 `STRIP=1` (default) strips debug symbols from the shipped binary and writes a `<binary>.debug` sidecar next to it. Set `STRIP=0` for an unstripped binary.

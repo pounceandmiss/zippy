@@ -8,6 +8,12 @@
 #   APP_EXCLUDE :=                 (optional, extra excludes: space-separated names)
 #   STRIP       := 1 | 0           (default: 1 — strip symbols, save .debug sidecar)
 #   GC_SECTIONS := 1 | 0           (default: 1 — drop unreferenced code at link)
+#   TCLLIB_INCLUDE :=              (optional whitelist of tcllib submodules to
+#                                   bundle, e.g. "math base64 json"; unset =
+#                                   ship all of tcllib. The user must list
+#                                   intra-tcllib deps explicitly — nothing is
+#                                   auto-resolved, and `package require tcllib`
+#                                   stops working in whitelist mode.)
 #
 # Note: `img` requires Tk and is only valid with SHELL_TYPE=wish (default).
 #
@@ -136,7 +142,16 @@ ifneq (,$(filter tdom,$(DEPS)))
 endif
 ifneq (,$(filter tcllib,$(DEPS)))
   DEP_STAMPS += $(PREFIX)/.tcllib_installed
-  DEP_LIBS += $(wildcard $(PREFIX)/lib/tcllib*)
+  ifeq ($(strip $(TCLLIB_INCLUDE)),)
+    DEP_LIBS += $(wildcard $(PREFIX)/lib/tcllib*)
+  else
+    # Whitelist mode: pass each requested submodule as its own libdir; it lands
+    # at //zipfs:/app/lib/<module>/ and Tcl's auto_path scan discovers it. The
+    # umbrella tcllib2.0/ dir is dropped (see _TCL_PKG_EXCLUDE below) — its
+    # pkgIndex.tcl hard-codes the full module list and would error on missing
+    # subdirs.
+    DEP_LIBS += $(foreach m,$(TCLLIB_INCLUDE),$(PREFIX)/lib/tcllib$(TCLLIB_VER)/$(m))
+  endif
 endif
 ifneq (,$(filter mtls,$(DEPS)))
   DEP_STAMPS += $(PREFIX)/.mtls_installed
@@ -193,10 +208,17 @@ ifneq (,$(filter mtls,$(DEPS)))
 endif
 
 # ==== Tcl/Tk bundled packages ====
-# Exclude itcl/tdbc family (not zippy deps) and internal dirs
+# Exclude itcl/tdbc family (not zippy deps) and internal dirs. In tcllib
+# whitelist mode also drop the umbrella tcllib2.0/ dir — its pkgIndex.tcl
+# hard-codes the full module list and would crash on missing subdirs.
 _TCL_PKG_EXCLUDE = pkgconfig tcl9 tk$(TK_BVER) \
     itcl$(ITCL_VER) \
     tdbc$(TDBC_VER) tdbcmysql$(TDBC_VER) tdbcodbc$(TDBC_VER) tdbcpostgres$(TDBC_VER)
+ifneq (,$(filter tcllib,$(DEPS)))
+  ifneq ($(strip $(TCLLIB_INCLUDE)),)
+    _TCL_PKG_EXCLUDE += tcllib$(TCLLIB_VER)
+  endif
+endif
 TCL_PKG_LIBS = $(filter-out $(foreach e,$(_TCL_PKG_EXCLUDE),$(PREFIX)/lib/$e) $(DEP_LIBS),\
                  $(patsubst %/pkgIndex.tcl,%,$(wildcard $(PREFIX)/lib/*/pkgIndex.tcl)))
 
