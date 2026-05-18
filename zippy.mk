@@ -14,6 +14,16 @@
 #                                   intra-tcllib deps explicitly — nothing is
 #                                   auto-resolved, and `package require tcllib`
 #                                   stops working in whitelist mode.)
+#   IMG_INCLUDE :=                 (optional whitelist of tkimg format readers
+#                                   to compile in, e.g. "png jpeg bmp"; unset =
+#                                   all formats. Required base libs (zlibtcl /
+#                                   pngtcl / jpegtcl / tifftcl) are auto-
+#                                   derived from the format list. The Img
+#                                   build itself still builds every subdir —
+#                                   the whitelist only affects what gets
+#                                   linked into kitsh and bundled into the
+#                                   generated pkgIndex.tcl, so changes
+#                                   require `make clean` to take effect.)
 #
 # Note: `img` requires Tk and is only valid with SHELL_TYPE=wish (default).
 #
@@ -161,6 +171,36 @@ ifneq (,$(filter img,$(DEPS)))
   ifeq ($(SHELL_TYPE),tclsh)
     $(error img requires Tk; cannot be used with SHELL_TYPE=tclsh)
   endif
+  IMG_ALL_FORMATS := bmp dted flir gif ico jpeg pcx pixmap png ppm ps raw sgi sun tga tiff window xbm xpm
+  ifeq ($(strip $(IMG_INCLUDE)),)
+    IMG_FORMATS := $(IMG_ALL_FORMATS)
+  else
+    IMG_FORMATS := $(strip $(IMG_INCLUDE))
+    _IMG_BAD := $(filter-out $(IMG_ALL_FORMATS),$(IMG_FORMATS))
+    ifneq (,$(_IMG_BAD))
+      $(error Unknown IMG_INCLUDE format(s): $(_IMG_BAD). Valid: $(IMG_ALL_FORMATS))
+    endif
+  endif
+  # Base libs are auto-derived from the format whitelist: tkimg is always
+  # required; zlibtcl/pngtcl/jpegtcl/tifftcl come in if a format that needs
+  # them is selected (see configure.ac's TEA_CONFIG_SUBDIR --with-* args).
+  IMG_BASE_PKGS := tkimg
+  ifneq (,$(filter png tiff,$(IMG_FORMATS)))
+    IMG_BASE_PKGS += zlibtcl
+  endif
+  ifneq (,$(filter png,$(IMG_FORMATS)))
+    IMG_BASE_PKGS += pngtcl
+  endif
+  ifneq (,$(filter jpeg tiff,$(IMG_FORMATS)))
+    IMG_BASE_PKGS += jpegtcl
+  endif
+  ifneq (,$(filter tiff,$(IMG_FORMATS)))
+    IMG_BASE_PKGS += tifftcl
+  endif
+  # Uppercased token list for the -DWITH_IMG_<NAME> flags fed to kitsh.c.
+  # Base vs format names don't collide (e.g. WITH_IMG_TIFF format vs
+  # WITH_IMG_TIFFTCL base) so a single combined list is fine.
+  IMG_KITSH_DEFINES := $(shell echo $(IMG_BASE_PKGS) $(IMG_FORMATS) | tr a-z A-Z)
   DEP_STAMPS += $(PREFIX)/.img_installed
   DEP_LIBS += $(wildcard $(PREFIX)/lib/Img$(IMG_VER))
 endif
@@ -240,8 +280,20 @@ ifneq (,$(filter mtls,$(DEPS)))
   KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/mtls*/libtcl9mtls*.a)
 endif
 ifneq (,$(filter img,$(DEPS)))
-  KITSH_DEP_FLAGS += -DWITH_IMG
-  KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/Img$(IMG_VER)/libtcl9*.a)
+  # Per-module gates in kitsh.c — only the whitelisted Tcl_StaticPackage calls
+  # compile in. With nothing referencing the dropped <Pkg>_Init symbols, the
+  # corresponding static archives (plus their libpng/libjpeg/libtiff/zlib
+  # transitively) get pulled out of the --start-group/--end-group scan.
+  KITSH_DEP_FLAGS += $(addprefix -DWITH_IMG_,$(IMG_KITSH_DEFINES))
+  # Base archives carry a per-bundle-lib version suffix (zlibtcl uses the
+  # zlib version, etc.); format archives all use $(IMG_VER).
+  _IMG_LIB_tkimg   = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9tkimg$(IMG_VER).a
+  _IMG_LIB_zlibtcl = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9zlibtcl$(IMG_ZLIB_VER).a
+  _IMG_LIB_pngtcl  = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9pngtcl$(IMG_PNG_VER).a
+  _IMG_LIB_jpegtcl = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9jpegtcl$(IMG_JPEG_VER).a
+  _IMG_LIB_tifftcl = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9tifftcl$(IMG_TIFF_VER).a
+  KITSH_DEP_LIBS  += $(foreach b,$(IMG_BASE_PKGS),$(_IMG_LIB_$(b))) \
+                     $(foreach f,$(IMG_FORMATS),$(PREFIX)/lib/Img$(IMG_VER)/libtcl9tkimg$(f)$(IMG_VER).a)
 endif
 
 # Linker driver — gcc by default. Rtc / rtcma (C++) flip us to g++ +
@@ -473,7 +525,8 @@ $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 	find $(IMG_SRC)/build -name 'libtcl9*.a' -exec cp {} $(PREFIX)/lib/Img$(IMG_VER)/ \;
 	$(TCLSH) $(IMG_PKGINDEX_TCL) \
 		$(PREFIX)/lib/Img$(IMG_VER)/pkgIndex.tcl \
-		$(IMG_VER) $(IMG_ZLIB_VER) $(IMG_PNG_VER) $(IMG_JPEG_VER) $(IMG_TIFF_VER)
+		$(IMG_VER) $(IMG_ZLIB_VER) $(IMG_PNG_VER) $(IMG_JPEG_VER) $(IMG_TIFF_VER) \
+		"$(IMG_BASE_PKGS)" "$(IMG_FORMATS)"
 	touch $@
 
 # Rtc: out-of-tree cmake build against a local libdatachannel-tcl source dir.

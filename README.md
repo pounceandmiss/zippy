@@ -92,7 +92,7 @@ Optional, any combination of:
 - `tdom` — XML/HTML parsing
 - `tcllib` — standard Tcl library collection
 - `mtls` — TLS via mbedTLS
-- `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps.
+- `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps. See `IMG_INCLUDE` below to compile in only a subset of format readers.
 - `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. When combined with `mtls`, tclmtls is configured with `--with-mbedtls=` pointing at the rtc vendor prefix so both share a single mbedtls (avoids duplicate-symbol link errors).
 - `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too: rtcma consumes libdatachannel and mbedtls from rtc's vendor prefix instead of rebuilding them.
 
@@ -105,6 +105,22 @@ TCLLIB_INCLUDE := math base64 json
 ```
 
 Transitive deps are not auto-resolved (list them yourself), and `package require tcllib` stops working in whitelist mode — require the specific submodules.
+
+### `IMG_INCLUDE`
+
+Whitelist of tkimg format readers to compile into the kitsh binary. Unset = ship every format.
+
+```makefile
+IMG_INCLUDE := png jpeg bmp
+```
+
+Valid names: `bmp`, `dted`, `flir`, `gif`, `ico`, `jpeg`, `pcx`, `pixmap`, `png`, `ppm`, `ps`, `raw`, `sgi`, `sun`, `tga`, `tiff`, `window`, `xbm`, `xpm`.
+
+Required base libs (`zlibtcl` / `pngtcl` / `jpegtcl` / `tifftcl`) are derived from the format list, so e.g. selecting `png` automatically pulls in `zlibtcl`+`pngtcl` (and only those — `libjpeg`/`libtiff` are dropped from the link).
+
+The umbrella `package require Img` still works, but only requires the intersection of the whitelist with Img's default auto-detect subset. To pull in a format that isn't in that subset (`dted`/`flir`/`gif`/`raw`/`ps`), use `package require img::<name>` directly.
+
+The Img build itself still compiles every subdir — the whitelist only affects what gets linked and what the generated `pkgIndex.tcl` advertises. Because of that, **changing `IMG_INCLUDE` requires `make clean`** before rebuilding.
 
 ### `STRIP`
 
