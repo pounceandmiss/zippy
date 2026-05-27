@@ -51,7 +51,7 @@
 # section granularity is baked into the static archives at compile time).
 
 # ==== Paths ====
-ZIPPYDIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+ZIPPYDIR     := $(abspath $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST)))))
 BASEDIR      := $(CURDIR)
 BUILDDIR     := $(BASEDIR)/_build
 PREFIX       := $(BUILDDIR)/local
