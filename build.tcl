@@ -37,6 +37,19 @@ proc writeFile {path content} {
     }
 }
 
+proc mergeDir {src dst} {
+    foreach entry [glob -nocomplain -directory $src *] {
+        set tail [file tail $entry]
+        set target [file join $dst $tail]
+        if {[file isdirectory $entry] && [file isdirectory $target]} {
+            mergeDir $entry $target
+        } else {
+            file delete -force $target
+            file copy -force $entry $target
+        }
+    }
+}
+
 # Rewrite `load [file join $dir foo.so] Foo` to `load {} Foo` in a pkgIndex.tcl,
 # so the package resolves through Tcl_StaticPackage entries registered in
 # kitsh.c instead of trying to dlopen a non-existent shared library. Returns
@@ -185,11 +198,12 @@ foreach src $sourceList {
             error "SOURCES entry not found: $src"
         }
         set dst [file join $tmpDir $tail]
-        if {[file exists $dst]} {
-            puts "warning: SOURCES basename collision on '$tail' — last write wins"
+        if {[file isdirectory $src] && [file isdirectory $dst]} {
+            mergeDir $src $dst
+        } else {
             file delete -force $dst
+            file copy -force $src $dst
         }
-        file copy -force $src $dst
     }
 }
 
