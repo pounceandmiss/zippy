@@ -17,6 +17,15 @@ extern int Rtc_Init(Tcl_Interp *);
 #ifdef WITH_RTCMA
 extern int Rtcma_Init(Tcl_Interp *);
 #endif
+#ifdef WITH_OMEMO
+extern int Omemo_Init(Tcl_Interp *);
+#endif
+#ifdef WITH_TCLWUFFS
+extern int Tclwuffs_Init(Tcl_Interp *);
+#endif
+#ifdef WITH_TKWUFFS
+extern int Tkwuffs_Init(Tcl_Interp *);
+#endif
 /* Img/tkimg modules are gated individually so IMG_INCLUDE in zippy.mk can
  * drop unused format readers (and the libpng/libjpeg/libtiff/zlib that some
  * of them pull in) from the link. WITH_IMG_TKIMG is always defined when img
@@ -121,6 +130,15 @@ int main(int argc, char **argv) {
 #endif
 #ifdef WITH_RTCMA
     Tcl_StaticPackage(0, "Rtcma", Rtcma_Init, NULL);
+#endif
+#ifdef WITH_OMEMO
+    Tcl_StaticPackage(0, "Omemo", Omemo_Init, NULL);
+#endif
+#ifdef WITH_TCLWUFFS
+    Tcl_StaticPackage(0, "Tclwuffs", Tclwuffs_Init, NULL);
+#endif
+#ifdef WITH_TKWUFFS
+    Tcl_StaticPackage(0, "Tkwuffs", Tkwuffs_Init, NULL);
 #endif
 #ifdef WITH_IMG_TKIMG
     Tcl_StaticPackage(0, "Tkimg",       Tkimg_Init,       NULL);

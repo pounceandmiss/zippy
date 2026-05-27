@@ -1,15 +1,21 @@
 #!/usr/bin/env tclsh9.0
 #
-# Usage: build.tcl <shell> <basedir> <outfile> <appdir> <excludes> <static_pkgs> [libdir ...]
+# Usage: build.tcl <shell> <basedir> <outfile> <sources> <entry_script> <excludes> <static_pkgs> [libdir ...]
 #
-#   shell       - "wish" or "tclsh" (selects base interpreter)
-#   basedir     - project root (contains _build/, app files, output)
-#   outfile     - full path to output binary
-#   appdir      - directory containing app source files (empty string for standalone)
-#   excludes    - comma-separated names to skip when copying app files
-#   static_pkgs - comma-separated pkg:loadname:version triples for statically
-#                 linked packages registered via Tcl_StaticPackage in kitsh.c
-#   libdirs     - lib directories to copy into the image
+#   shell        - "wish" or "tclsh" (selects base interpreter)
+#   basedir      - project root (contains _build/, app files, output)
+#   outfile      - full path to output binary
+#   sources      - comma-separated list of paths to bundle. Each path is copied
+#                  under its basename. Special case: an entry whose basename is
+#                  "." or empty (e.g. "./") globs its CONTENTS into the root.
+#                  Empty string = standalone (no app bundling).
+#   entry_script - path within the bundled tree of the startup script. If not
+#                  "main.tcl", a synthetic main.tcl is written at the zipfs
+#                  root that sources this path. Empty for standalone.
+#   excludes     - comma-separated names to skip when copying app files
+#   static_pkgs  - comma-separated pkg:loadname:version triples for statically
+#                  linked packages registered via Tcl_StaticPackage in kitsh.c
+#   libdirs      - lib directories to copy into the image
 
 # ==== Helpers ====
 
@@ -45,8 +51,8 @@ proc patchPkgIndexLoadPaths {pkgIndex} {
 }
 
 # ==== Parse args ====
-lassign $argv shell baseDir outFile appDir excludes staticPkgs
-set libDirs [lrange $argv 6 end]
+lassign $argv shell baseDir outFile sources entryScript excludes staticPkgs
+set libDirs [lrange $argv 7 end]
 
 # ==== Resolve paths ====
 set buildDir [file join $baseDir _build]
@@ -152,15 +158,51 @@ if {[llength $staticList] > 0} {
     writeFile [file join $staticDir pkgIndex.tcl] [join $entries \n]\n
 }
 
-# ==== 4. Copy app files (main.tcl goes in the root) ====
-if {$appDir ne ""} {
-    foreach f [glob -directory $appDir *] {
-        set tail [file tail $f]
-        if {$tail in $excludeSet} {
-            continue
+# ==== 4. Copy app files ====
+# Each SOURCES entry: if its basename is `.` or empty (e.g. "./"), glob its
+# contents into the zipfs root (drop-in default for single-dir projects).
+# Otherwise copy the entry preserving its basename. Top-level excludes apply
+# in both modes (to the immediate children in glob mode, or to the entry
+# itself in basename mode).
+set sourceList [list]
+foreach s [split $sources ,] {
+    set s [string trim $s]
+    if {$s ne ""} { lappend sourceList $s }
+}
+foreach src $sourceList {
+    set tail [file tail $src]
+    if {$tail eq "" || $tail eq "."} {
+        # Glob-contents mode.
+        foreach f [glob -nocomplain -directory $src *] {
+            set ftail [file tail $f]
+            if {$ftail in $excludeSet} continue
+            file copy -force $f [file join $tmpDir $ftail]
         }
-        file copy -force $f [file join $tmpDir $tail]
+    } else {
+        # Basename-preserved mode.
+        if {$tail in $excludeSet} continue
+        if {![file exists $src]} {
+            error "SOURCES entry not found: $src"
+        }
+        set dst [file join $tmpDir $tail]
+        if {[file exists $dst]} {
+            puts "warning: SOURCES basename collision on '$tail' — last write wins"
+            file delete -force $dst
+        }
+        file copy -force $src $dst
     }
+}
+
+# Synthesize a main.tcl at the zipfs root if the entry script lives elsewhere.
+# Kitsh registers //zipfs:/app/main.tcl as the startup script unconditionally,
+# so the synthetic stub just sources the real entry.
+if {$entryScript ne "" && $entryScript ne "main.tcl"} {
+    set entryPath [file join $tmpDir $entryScript]
+    if {![file exists $entryPath]} {
+        error "ENTRY_SCRIPT not found in bundled tree: $entryScript"
+    }
+    writeFile [file join $tmpDir main.tcl] \
+        "source \[file join //zipfs:/app $entryScript\]\n"
 }
 
 # ==== 5. Build the zipfs image ====

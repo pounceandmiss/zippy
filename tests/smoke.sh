@@ -15,7 +15,7 @@ if [[ -z "${DISPLAY:-}" ]]; then
     exit 0
 fi
 
-DEPS="tdom mtls tcllib img rtc rtcma"
+DEPS="tdom mtls tcllib img rtc rtcma omemo tclwuffs tkwuffs"
 PASS=0 FAIL=0
 BUILDLOG=$(mktemp)
 PNG_FILE=$(mktemp --suffix=.png)
@@ -74,6 +74,27 @@ assert "mtls" 'package require mtls; puts OK; exit'
 assert "rtc" 'package require rtc; puts OK; exit'
 
 assert "rtcma" 'package require rtcma; puts OK; exit'
+
+assert "omemo version" 'package require omemo
+if {[string length [::omemo::version]] > 0} {puts OK}
+exit'
+
+# PNG_FILE bash-interpolated into otherwise-single-quoted Tcl.
+assert "tclwuffs sniff PNG" '
+package require tclwuffs
+set f [open '"$PNG_FILE"' rb]
+set bytes [read $f]; close $f
+if {[::tclwuffs::sniff $bytes] eq "png"} {puts OK}
+exit'
+
+assert "tkwuffs decode PNG" '
+package require tkwuffs
+set f [open '"$PNG_FILE"' rb]
+set bytes [read $f]; close $f
+image create photo p
+::tkwuffs::decode_to_photo $bytes p
+if {[image width p] == 8 && [image height p] == 8} {puts OK}
+exit'
 
 assert "tcllib json" 'package require json
 if {[json::json2dict {{"a":1}}] eq "a 1"} {puts OK}

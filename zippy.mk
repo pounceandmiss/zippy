@@ -1,11 +1,24 @@
 # zippy.mk — Build system for self-contained Tcl/Tk zipfs binaries
 #
 # User sets these before including:
-#   SHELL_TYPE  := wish | tclsh    (default: wish)
-#   DEPS        := tdom mtls tcllib img   (optional, any combination)
-#   BIN_NAME    := myapp           (optional, omit for standalone interpreter)
-#   APP_DIR     := .               (default: project root)
-#   APP_EXCLUDE :=                 (optional, extra excludes: space-separated names)
+#   SHELL_TYPE   := wish | tclsh   (default: wish)
+#   DEPS         := tdom mtls tcllib img  (optional, any combination)
+#   BIN_NAME     := myapp          (optional, omit for standalone interpreter)
+#   SOURCES      := ./             (default; space-separated list of paths to
+#                                   bundle into the zipfs. Each path is copied
+#                                   under its basename. Special case: `./` (or
+#                                   any path whose basename is `.` / empty)
+#                                   globs its CONTENTS into the root rather
+#                                   than nesting under that name — preserves
+#                                   the single-project-dir drop-in default.)
+#   ENTRY_SCRIPT := main.tcl       (path within the bundled tree of the script
+#                                   to run at startup. When non-default, zippy
+#                                   synthesizes a main.tcl at zipfs root that
+#                                   sources it.)
+#   APP_EXCLUDE  :=                (optional, extra excludes: space-separated
+#                                   names. Applied to top-level entries of each
+#                                   bundled SOURCES path.)
+#   APP_DIR      :=                (DEPRECATED — alias for SOURCES.)
 #   STRIP       := 1 | 0           (default: 1 — strip symbols, save .debug sidecar)
 #   GC_SECTIONS := 1 | 0           (default: 1 — drop unreferenced code at link)
 #   TCLLIB_INCLUDE :=              (optional whitelist of tcllib submodules to
@@ -25,7 +38,8 @@
 #                                   generated pkgIndex.tcl, so changes
 #                                   require `make clean` to take effect.)
 #
-# Note: `img` requires Tk and is only valid with SHELL_TYPE=wish (default).
+# Note: `img` and `tkwuffs` require Tk and are only valid with SHELL_TYPE=wish
+# (default). `tkwuffs` additionally requires `tclwuffs` (its no-Tk base tier).
 #
 # When STRIP=1 (default), the shipped binary has debug symbols removed and a
 # matching <binary>.debug sidecar is written next to it. Symbolize a crash with
@@ -44,10 +58,17 @@ PREFIX       := $(BUILDDIR)/local
 DEPSDIR      := $(BUILDDIR)/deps
 BUILD_TCL    := $(ZIPPYDIR)/build.tcl
 
-SHELL_TYPE  ?= wish
-APP_DIR     ?= .
-STRIP       ?= 1
-GC_SECTIONS ?= 1
+SHELL_TYPE   ?= wish
+SOURCES      ?= ./
+ENTRY_SCRIPT ?= main.tcl
+STRIP        ?= 1
+GC_SECTIONS  ?= 1
+
+# Backward-compat alias: APP_DIR → SOURCES (single entry).
+ifneq ($(origin APP_DIR),undefined)
+  SOURCES := $(APP_DIR)
+  $(warning APP_DIR is deprecated; use SOURCES instead.)
+endif
 
 # ==== Versions ====
 TCL_VER    := 9.0.3
@@ -73,23 +94,48 @@ IMG_PNG_VER   := 1.6.55
 IMG_JPEG_VER  := 10.0.0
 IMG_TIFF_VER  := 4.7.1
 
-# Rtc (libdatachannel-tcl). C++ Tcl 9 binding for libdatachannel, cloned
-# from GitHub; built via cmake with RTC_BUNDLE_DEPS=ON so
-# libdatachannel/mbedtls fold in as static archives alongside the binding.
+# Mbedtls. Shared crypto dep consumed by rtc/mtls/omemo. Built with the
+# user-config file below to enable MBEDTLS_SSL_DTLS_SRTP (libdatachannel
+# needs it; everyone else has to compile against the same headers or struct
+# layouts diverge).
+MBEDTLS_VER       := 3.6.6
+MBEDTLS_REPO      := https://github.com/Mbed-TLS/mbedtls.git
+MBEDTLS_COMMIT    := 5b64a9fdb979c8971561ec78221b528e3cc4e00a
+MBEDTLS_SRC       := $(DEPSDIR)/mbedtls
+MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
+
+# Rtc (libdatachannel-tcl). C++ Tcl 9 binding for libdatachannel. Built via
+# cmake with RTC_BUNDLE_LIBDATACHANNEL=ON so libdatachannel/juice/srtp2/
+# usrsctp fold in as static archives; mbedtls comes from zippy's shared
+# install via find_package.
 RTC_VER    := 0.1.0
 RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
-RTC_COMMIT := fc623e5272604788ef1309ff31adb9fa1a8053d1
+RTC_COMMIT := 1570abea9498b72cb51201984e3b614b100c05d6
 RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 
 # Rtcma (rtc-ma). Audio-over-libdatachannel adapter (miniaudio + opus +
-# jitter buffer + SDP) with its own Tcl 9 binding, cloned from GitHub.
-# Built via cmake with RTCMA_BUNDLE_OPUS=ON only — libdatachannel and
-# mbedtls are *not* rebuilt, they're consumed from rtc's vendor prefix,
-# which is why `rtc` must also be in DEPS (enforced below).
+# jitter buffer + SDP) with its own Tcl 9 binding. Built via cmake with
+# RTCMA_BUNDLE_OPUS=ON only; libdatachannel comes from rtc's vendor and
+# mbedtls from zippy's shared install, which is why `rtc` must also be in
+# DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 664879a8eabacefea988c8d021be0563aa4497ff
+RTCMA_COMMIT := abeb0898466dcfaec01d134681e87f4fb2a56d9b
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma
+
+# Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
+OMEMO_VER    := 0.3.0
+OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
+OMEMO_COMMIT := 3edf2c619142ef8d9dfb843caf6b69980a3081cb
+OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl
+
+# Tclwuffs. Memory-safe image decode/encode/resize on wuffs+stb. Two tiers:
+# `tclwuffs` (no-Tk) and `tkwuffs` (Tk photo bridge); the shared wuffs/stb
+# glue lives only in libtclwuffs.a.
+TCLWUFFS_VER    := 0.1.0
+TCLWUFFS_REPO   := https://github.com/pounceandmiss/tclwuffs.git
+TCLWUFFS_COMMIT := 901eda7a67bef4c92a4f036fa347325b3ea93019
+TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs
 
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
 # of the package name (dir is sqlite3.51.0 for version 3.51.0).
@@ -222,29 +268,27 @@ ifneq (,$(filter rtcma,$(DEPS)))
   DEP_STAMPS += $(PREFIX)/.rtcma_installed
   # Same as rtc: fully static-linked, no zipfs lib entry.
 endif
-
-# When both mtls and rtc are enabled, point tclmtls at libdatachannel-tcl's
-# bundled mbedtls so we don't link two copies (different patch versions, both
-# exporting the same mbedtls_* symbols → multiple-definition). In this mode
-# tclmtls's archive references the mbedtls symbols instead of baking them in;
-# the kitsh link already includes $(RTC_BUILD)/vendor/lib/*.a.
-#
-# Also propagate the same MBEDTLS_USER_CONFIG_FILE to tclmtls's compile.
-# Without it, tclmtls's backend-mbedtls.c sees mbedtls headers with
-# MBEDTLS_SSL_DTLS_SRTP undefined while libmbedtls.a was built with it set —
-# mbedtls_ssl_config/_context struct layouts diverge and f_rng lands at a
-# different offset for caller vs callee, NULL-deref'ing in client_hello.
-#
-# rtcma is irrelevant here: its build consumes libdatachannel/mbedtls from
-# rtc's vendor, it doesn't produce its own.
-MTLS_EXTRA_CONFIG :=
-MTLS_EXTRA_DEPS   :=
-ifneq (,$(filter mtls,$(DEPS)))
-  ifneq (,$(filter rtc,$(DEPS)))
-    MTLS_EXTRA_CONFIG := --with-mbedtls=$(BUILDDIR)/rtc/vendor \
-        CPPFLAGS='-DMBEDTLS_USER_CONFIG_FILE=\"$(RTC_SRC)/cmake/mbedtls-user-config.h\"'
-    MTLS_EXTRA_DEPS   := $(PREFIX)/.rtc_installed
+ifneq (,$(filter omemo,$(DEPS)))
+  # picomemo links libmbedcrypto and pulls mbedtls headers from zippy's
+  # shared mbedtls install.
+  DEP_STAMPS += $(PREFIX)/.omemo_installed
+  # Fully static-linked, no zipfs lib entry — see KITSH_DEP_LIBS below.
+endif
+ifneq (,$(filter tclwuffs,$(DEPS)))
+  DEP_STAMPS += $(PREFIX)/.tclwuffs_installed
+  # Fully static-linked, no zipfs lib entry — see KITSH_DEP_LIBS below.
+endif
+ifneq (,$(filter tkwuffs,$(DEPS)))
+  # tkwuffs's archive depends on symbols from libtclwuffs.a, so the base
+  # tier has to be in DEPS too.
+  ifeq ($(SHELL_TYPE),tclsh)
+    $(error tkwuffs requires Tk; cannot be used with SHELL_TYPE=tclsh)
   endif
+  ifeq (,$(filter tclwuffs,$(DEPS)))
+    $(error tkwuffs requires tclwuffs — add tclwuffs to DEPS)
+  endif
+  # No extra DEP_STAMPS entry: .tclwuffs_installed's recipe builds the
+  # tkwuffs archive too when tkwuffs is in DEPS.
 endif
 
 # ==== Tcl/Tk bundled packages ====
@@ -304,12 +348,13 @@ KITSH_KITSH_LANG      :=
 KITSH_KITSH_LANG_END  :=
 KITSH_EXTRA_LDFLAGS   :=
 
-# rtc owns libdatachannel + mbedtls (both bundled in $(RTC_BUILD)/vendor).
-# rtcma reuses those — see its recipe below for the
-# RTCMA_BUNDLE_OPUS=ON / CMAKE_PREFIX_PATH=$(RTC_BUILD)/vendor invocation.
+# rtc bundles libdatachannel/juice/srtp2/usrsctp in $(RTC_BUILD)/vendor; mbedtls
+# is consumed via find_package from $(PREFIX) (built by .mbedtls_installed) and
+# pulled in by the shared-mbedtls block below.
+# rtcma reuses rtc's vendor for libdatachannel and zippy's prefix for mbedtls.
 # So at kitsh-link time:
-#   - rtc contributes librtc_tcl.a + the full vendor archive set
-#     (libdatachannel + juice + srtp2 + usrsctp + mbed{tls,crypto,x509}).
+#   - rtc contributes librtc_tcl.a + the libdatachannel vendor archive set
+#     (libdatachannel + juice + srtp2 + usrsctp).
 #   - rtcma contributes librtcma_tcl.a + librtcma.a + just libopus.a
 #     from its own vendor (the only thing it actually bundles).
 ifneq (,$(filter rtc,$(DEPS)))
@@ -326,6 +371,31 @@ ifneq (,$(filter rtcma,$(DEPS)))
       $(RTCMA_BUILD)/tcl/librtcma_tcl.a \
       $(RTCMA_BUILD)/librtcma.a \
       $(wildcard $(RTCMA_BUILD)/vendor/lib/libopus*.a)
+endif
+ifneq (,$(filter omemo,$(DEPS)))
+  KITSH_DEP_FLAGS += -DWITH_OMEMO
+  # Built in-tree under OMEMO_SRC — picomemo's Makefile drops the archive
+  # next to the source. Lazy expansion is fine, the recipe below produces it
+  # before kitsh links.
+  KITSH_DEP_LIBS  += $(OMEMO_SRC)/libtcl9omemo$(OMEMO_VER).a
+endif
+
+# Shared mbedtls archives. mtls/rtc/omemo reference these symbols without
+# embedding them. everest/p256m are mbedtls 3.6+ per-curve splits.
+ifneq (,$(filter mtls rtc omemo,$(DEPS)))
+  KITSH_DEP_LIBS  += \
+      $(wildcard $(PREFIX)/lib/libmbed*.a) \
+      $(wildcard $(PREFIX)/lib/libeverest.a) \
+      $(wildcard $(PREFIX)/lib/libp256m.a)
+endif
+
+ifneq (,$(filter tclwuffs,$(DEPS)))
+  KITSH_DEP_FLAGS += -DWITH_TCLWUFFS
+  KITSH_DEP_LIBS  += $(TCLWUFFS_SRC)/libtclwuffs$(TCLWUFFS_VER).a
+endif
+ifneq (,$(filter tkwuffs,$(DEPS)))
+  KITSH_DEP_FLAGS += -DWITH_TKWUFFS
+  KITSH_DEP_LIBS  += $(TCLWUFFS_SRC)/libtkwuffs$(TCLWUFFS_VER).a
 endif
 
 # C++ link driver toggle: triggered by any libdatachannel-based dep.
@@ -368,6 +438,7 @@ ifdef BIN_NAME
 endif
 _ALL_EXCLUDES := $(_BUILTIN_EXCLUDES) $(APP_EXCLUDE)
 _EXCLUDES_CSV := $(subst $(eval ) ,$(shell echo ','),$(_ALL_EXCLUDES))
+_SOURCES_CSV  := $(subst $(eval ) ,$(shell echo ','),$(SOURCES))
 
 # ==== Static-package wiring (pkg:loadname:version) ====
 # kitsh.c registers each via Tcl_StaticPackage; build.tcl turns this list into
@@ -384,6 +455,15 @@ ifneq (,$(filter rtc,$(DEPS)))
 endif
 ifneq (,$(filter rtcma,$(DEPS)))
   STATIC_PKGS += rtcma:Rtcma:$(RTCMA_VER)
+endif
+ifneq (,$(filter omemo,$(DEPS)))
+  STATIC_PKGS += omemo:Omemo:$(OMEMO_VER)
+endif
+ifneq (,$(filter tclwuffs,$(DEPS)))
+  STATIC_PKGS += tclwuffs:Tclwuffs:$(TCLWUFFS_VER)
+endif
+ifneq (,$(filter tkwuffs,$(DEPS)))
+  STATIC_PKGS += tkwuffs:Tkwuffs:$(TCLWUFFS_VER)
 endif
 _STATIC_PKGS_CSV := $(subst $(eval ) ,$(shell echo ','),$(STATIC_PKGS))
 
@@ -422,6 +502,10 @@ $(MTLS_SRC):
 	git clone $(MTLS_REPO) $(MTLS_SRC)
 	cd $(MTLS_SRC) && git checkout $(MTLS_COMMIT) && git submodule update --init --recursive
 
+$(MBEDTLS_SRC):
+	git clone $(MBEDTLS_REPO) $(MBEDTLS_SRC)
+	cd $(MBEDTLS_SRC) && git checkout $(MBEDTLS_COMMIT) && git submodule update --init --recursive
+
 $(RTC_SRC):
 	git clone $(RTC_REPO) $(RTC_SRC)
 	cd $(RTC_SRC) && git checkout $(RTC_COMMIT) && git submodule update --init --recursive
@@ -430,12 +514,20 @@ $(RTCMA_SRC):
 	git clone $(RTCMA_REPO) $(RTCMA_SRC)
 	cd $(RTCMA_SRC) && git checkout $(RTCMA_COMMIT) && git submodule update --init --recursive
 
+$(OMEMO_SRC):
+	git clone $(OMEMO_REPO) $(OMEMO_SRC)
+	cd $(OMEMO_SRC) && git checkout $(OMEMO_COMMIT) && git submodule update --init --recursive
+
+$(TCLWUFFS_SRC):
+	git clone $(TCLWUFFS_REPO) $(TCLWUFFS_SRC)
+	cd $(TCLWUFFS_SRC) && git checkout $(TCLWUFFS_COMMIT) && git submodule update --init --recursive
+
 $(DEPSDIR)/$(IMG_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ "$(IMG_URL)"
 	echo "$(IMG_SHA256)  $@" | sha256sum -c
 
-download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(RTC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(IMG_TAR)
+download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(RTCMA_SRC) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(DEPSDIR)/$(IMG_TAR)
 
 # ==== Extract ====
 
@@ -496,11 +588,16 @@ $(PREFIX)/.tcllib_installed: $(TCLLIB_SRC) $(TCLSH)
 		$(MAKE) install
 	touch $@
 
-$(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(MTLS_EXTRA_DEPS)
+# Builds against zippy's shared mbedtls, not mtls's own submodule.
+# MBEDTLS_USER_CONFIG_FILE must match what libmbedtls.a was compiled with,
+# otherwise struct layouts diverge between mtls and libmbedtls.
+$(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 	mkdir -p $(MTLS_SRC)/build
 	cd $(MTLS_SRC)/build && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
-		../configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared $(MTLS_EXTRA_CONFIG) && \
+		../configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared \
+			--with-mbedtls=$(PREFIX) \
+			CPPFLAGS='-DMBEDTLS_USER_CONFIG_FILE=\"$(MBEDTLS_USER_CFG)\"' && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	touch $@
@@ -529,16 +626,32 @@ $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 		"$(IMG_BASE_PKGS)" "$(IMG_FORMATS)"
 	touch $@
 
-# Rtc: out-of-tree cmake build against a local libdatachannel-tcl source dir.
-# BUNDLE_DEPS rebuilds mbedtls/libdatachannel into static archives inside the
-# build tree's vendor/lib; the tcl/ subdir's rtc_tcl_static target emits
-# librtc_tcl.a (the Tcl 9 extension archive whose Rtc_Init we wire into
-# kitsh.c via Tcl_StaticPackage).
-$(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC)
+# MBEDTLS_USER_CONFIG_FILE propagates as a PUBLIC compile def to consumers
+# via find_package(MbedTLS), so all callers see matching struct layouts.
+$(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
+	cmake -S $(MBEDTLS_SRC) -B $(BUILDDIR)/mbedtls \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
+		-DENABLE_PROGRAMS=OFF \
+		-DENABLE_TESTING=OFF \
+		-DUSE_SHARED_MBEDTLS_LIBRARY=OFF \
+		-DUSE_STATIC_MBEDTLS_LIBRARY=ON \
+		-DMBEDTLS_FATAL_WARNINGS=OFF \
+		-DMBEDTLS_USER_CONFIG_FILE=$(MBEDTLS_USER_CFG) \
+		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)"
+	cmake --build $(BUILDDIR)/mbedtls -j$(NPROC)
+	cmake --install $(BUILDDIR)/mbedtls
+	touch $@
+
+# RTC_BUNDLE_LIBDATACHANNEL=ON rebuilds libdatachannel/juice/srtp2/usrsctp
+# into static archives under the build tree's vendor/lib; mbedtls is
+# resolved via find_package against $(PREFIX).
+$(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(PREFIX)/.mbedtls_installed
 	cmake -S $(RTC_SRC) -B $(BUILDDIR)/rtc \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-		-DRTC_BUNDLE_DEPS=ON \
+		-DRTC_BUNDLE_LIBDATACHANNEL=ON \
 		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)" \
 		-DCMAKE_CXX_FLAGS="$(SIZE_CFLAGS)" \
 		-DCMAKE_PREFIX_PATH=$(PREFIX)
@@ -547,13 +660,12 @@ $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC)
 	touch $@
 
 # Rtcma: out-of-tree cmake build. RTCMA_BUNDLE_OPUS=ON builds opus from
-# source into the build tree's vendor/ prefix; libdatachannel and mbedtls
-# are *not* rebuilt — rtcma's find_package(LibDataChannel) resolves
-# against rtc's vendor install (see CMAKE_PREFIX_PATH). RTCMA_BUILD_TCL=ON
-# pulls in tcl/CMakeLists.txt, which emits librtcma_tcl.a (the Tcl 9
-# extension archive whose Rtcma_Init we wire into kitsh.c via
-# Tcl_StaticPackage) alongside librtcma.a (the audio adapter library
-# itself).
+# source into the build tree's vendor/ prefix; libdatachannel comes from
+# rtc's vendor install and mbedtls from $(PREFIX) (see MbedTLS_DIR /
+# CMAKE_PREFIX_PATH below). RTCMA_BUILD_TCL=ON pulls in tcl/CMakeLists.txt,
+# which emits librtcma_tcl.a (the Tcl 9 extension archive whose Rtcma_Init
+# we wire into kitsh.c via Tcl_StaticPackage) alongside librtcma.a (the
+# audio adapter library itself).
 #
 # The order-only dependency on .rtc_installed makes sure rtc's vendor
 # install exists before rtcma's configure runs; the DEP_STAMPS block
@@ -567,9 +679,37 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(PREFIX)/.rtc_installed
 		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)" \
 		-DCMAKE_CXX_FLAGS="$(SIZE_CFLAGS)" \
 		-DLibDataChannel_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/LibDataChannel \
-		-DMbedTLS_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/MbedTLS \
+		-DMbedTLS_DIR=$(PREFIX)/lib/cmake/MbedTLS \
 		-DCMAKE_PREFIX_PATH='$(PREFIX);$(BUILDDIR)/rtc/vendor'
 	cmake --build $(BUILDDIR)/rtcma -j$(NPROC)
+	mkdir -p $(PREFIX)
+	touch $@
+
+# Shell out to picomemo's own Makefile. -fPIC overrides its STATIC_CF
+# default so the archive links into our PIE kitsh binary.
+$(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
+	$(MAKE) -C $(OMEMO_SRC) libtcl9omemo$(OMEMO_VER).a \
+		TCL_PREFIX=$(PREFIX) \
+		MBED_PREFIX=$(PREFIX) \
+		CFLAGS="-fPIC $(SIZE_CFLAGS)"
+	mkdir -p $(PREFIX)
+	touch $@
+
+# Point TC{L,K}CONFIG at our install so tclwuffs's autodetect picks our
+# static headers/stubs over any system Tcl/Tk. -fPIC overrides upstream's
+# STATIC_CF default for our PIE kitsh link.
+TCLWUFFS_MAKE_TARGETS := tclwuffs
+TCLWUFFS_EXTRA_DEPS   :=
+ifneq (,$(filter tkwuffs,$(DEPS)))
+  TCLWUFFS_MAKE_TARGETS += tkwuffs
+  TCLWUFFS_EXTRA_DEPS   := $(WISH)
+endif
+
+$(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
+	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
+		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
+		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \
+		CFLAGS="-fPIC $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 
@@ -606,8 +746,8 @@ endef
 ifdef BIN_NAME
 app: $(BASEDIR)/$(BIN_NAME)
 
-$(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(APP_DIR)/main.tcl
-	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ $(APP_DIR) $(_EXCLUDES_CSV) $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+$(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL)
+	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ $(_SOURCES_CSV) $(ENTRY_SCRIPT) $(_EXCLUDES_CSV) $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 	$(call maybe_copy_debug,$(BASE_INTERP),$@)
 endif
 
@@ -616,13 +756,13 @@ endif
 wish: $(BASEDIR)/wish
 
 $(BASEDIR)/wish: $(KITSH_WISH) $(DEP_STAMPS) $(BUILD_TCL)
-	$(TCLSH) $(BUILD_TCL) wish $(BASEDIR) $@ "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(TCLSH) $(BUILD_TCL) wish $(BASEDIR) $@ "" "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 	$(call maybe_copy_debug,$(KITSH_WISH),$@)
 
 tclsh: $(BASEDIR)/tclsh
 
 $(BASEDIR)/tclsh: $(KITSH_TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
-	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 	$(call maybe_copy_debug,$(KITSH_TCLSH),$@)
 
 # ==== Test ====
