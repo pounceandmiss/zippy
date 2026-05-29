@@ -15,7 +15,7 @@ if [[ -z "${DISPLAY:-}" ]]; then
     exit 0
 fi
 
-DEPS="tdom mtls tcllib img rtc rtcma omemo tclwuffs tkwuffs"
+DEPS="tdom mtls tcllib img rtc rtcma omemo tclwuffs tkwuffs tkdnd"
 PASS=0 FAIL=0
 BUILDLOG=$(mktemp)
 PNG_FILE=$(mktemp --suffix=.png)
@@ -105,6 +105,15 @@ assert "img PNG decode" '
 package require Img
 set i [image create photo -file '"$PNG_FILE"']
 if {[image width $i] == 8 && [$i get 0 0] eq {255 0 0}} {puts OK}
+exit'
+
+# Loading tkdnd exercises both halves: the static Tkdnd_Init and the bundled
+# Tcl scripts (drop_target is defined in tkdnd.tcl). Registering a target then
+# confirms the C commands wired up by initialise are callable.
+assert "tkdnd register" '
+package require tkdnd
+tkdnd::drop_target register . DND_Files
+if {[llength [info commands ::tkdnd::drop_target]]} {puts OK}
 exit'
 
 # ldd assertions: bundled deps must not pull in their system counterparts.

@@ -137,6 +137,15 @@ TCLWUFFS_REPO   := https://github.com/pounceandmiss/tclwuffs.git
 TCLWUFFS_COMMIT := 901eda7a67bef4c92a4f036fa347325b3ea93019
 TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs
 
+# Tkdnd. Native drag-and-drop for Tk (X11 XDND). TEA build that also ships Tcl
+# support scripts (tkdnd.tcl + per-platform files) beside the static archive.
+# Requires Tk (private headers + X11 selection), so wish-only. See the install
+# recipe for the static-link wiring.
+TKDND_VER    := 2.9.5
+TKDND_REPO   := https://github.com/petasis/tkdnd.git
+TKDND_COMMIT := 6efca37a22b93b2336dc973f2b4a9ba1e3feceaf
+TKDND_SRC    := $(DEPSDIR)/tkdnd
+
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
 # of the package name (dir is sqlite3.51.0 for version 3.51.0).
 SQLITE3_DIR_SUFFIX := $(patsubst 3.%,%,$(SQLITE3_VER))
@@ -290,6 +299,16 @@ ifneq (,$(filter tkwuffs,$(DEPS)))
   # No extra DEP_STAMPS entry: .tclwuffs_installed's recipe builds the
   # tkwuffs archive too when tkwuffs is in DEPS.
 endif
+ifneq (,$(filter tkdnd,$(DEPS)))
+  ifeq ($(SHELL_TYPE),tclsh)
+    $(error tkdnd requires Tk; cannot be used with SHELL_TYPE=tclsh)
+  endif
+  DEP_STAMPS += $(PREFIX)/.tkdnd_installed
+  # Bundle the lib dir (tkdnd.tcl + platform scripts + pkgIndex.tcl). build.tcl
+  # strips the .a out of the copied dir; the archive itself is linked into
+  # kitsh via KITSH_DEP_LIBS below.
+  DEP_LIBS += $(wildcard $(PREFIX)/lib/tkdnd$(TKDND_VER))
+endif
 
 # ==== Tcl/Tk bundled packages ====
 # Exclude itcl/tdbc family (not zippy deps) and internal dirs. In tcllib
@@ -397,6 +416,10 @@ ifneq (,$(filter tkwuffs,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_TKWUFFS
   KITSH_DEP_LIBS  += $(TCLWUFFS_SRC)/libtkwuffs$(TCLWUFFS_VER).a
 endif
+ifneq (,$(filter tkdnd,$(DEPS)))
+  KITSH_DEP_FLAGS += -DWITH_TKDND
+  KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/tkdnd$(TKDND_VER)/libtcl9tkdnd*.a)
+endif
 
 # C++ link driver toggle: triggered by any libdatachannel-based dep.
 ifneq (,$(filter rtc rtcma,$(DEPS)))
@@ -420,6 +443,12 @@ KITSH_SYSLIBS     := -lpthread -ldl -lz -lm
 # Tk 9 statically pulls in X11, Xft/fontconfig and Xss (XScreenSaver).
 # CUPS is dropped via --disable-libcups in the Tk configure step.
 KITSH_TK_SYSLIBS  := -lX11 -lXss -lXext -lXft -lfontconfig
+# tkdnd's Cursors.c links libXcursor (configure pulls it in when X11/Xcursor/
+# Xcursor.h is present). Goes here rather than KITSH_EXTRA_LDFLAGS, which the
+# rtc block overwrites with :=; wish-only, since tkdnd is.
+ifneq (,$(filter tkdnd,$(DEPS)))
+  KITSH_TK_SYSLIBS += -lXcursor
+endif
 
 KITSH_TCLSH := $(BUILDDIR)/kitsh_tclsh
 KITSH_WISH  := $(BUILDDIR)/kitsh_wish
@@ -522,12 +551,16 @@ $(TCLWUFFS_SRC):
 	git clone $(TCLWUFFS_REPO) $(TCLWUFFS_SRC)
 	cd $(TCLWUFFS_SRC) && git checkout $(TCLWUFFS_COMMIT) && git submodule update --init --recursive
 
+$(TKDND_SRC):
+	git clone $(TKDND_REPO) $(TKDND_SRC)
+	cd $(TKDND_SRC) && git checkout $(TKDND_COMMIT) && git submodule update --init --recursive
+
 $(DEPSDIR)/$(IMG_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ "$(IMG_URL)"
 	echo "$(IMG_SHA256)  $@" | sha256sum -c
 
-download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(RTCMA_SRC) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(DEPSDIR)/$(IMG_TAR)
+download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(RTCMA_SRC) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
 
 # ==== Extract ====
 
@@ -711,6 +744,31 @@ $(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \
 		CFLAGS="-fPIC $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
+	touch $@
+
+# A static (--disable-shared) `make install` skips pkgIndex.tcl (gated on a
+# shared build), as with Img, so the lib dir is installed manually: the archive,
+# the Tcl scripts, and the configure-generated pkgIndex.tcl. tkdnd's pkgIndex
+# loads the binary indirectly through tkdnd::initialise (in tkdnd.tcl), so that
+# `load $dir/$PKG_LIB_FILE` is rewritten to `load {}` to resolve through the
+# Tcl_StaticPackage("Tkdnd") entry in kitsh.c. tkdnd is therefore kept out of
+# STATIC_PKGS — its own pkgIndex already registers `package ifneeded`. Tk
+# private headers (tkInt.h) come from the Tk source tree via tkConfig.sh's
+# TK_SRC_DIR, hence the $(WISH) dependency.
+$(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
+	mkdir -p $(TKDND_SRC)/build
+	cd $(TKDND_SRC)/build && \
+		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
+		../configure --prefix=$(PREFIX) \
+			--with-tcl=$(PREFIX)/lib --with-tk=$(PREFIX)/lib \
+			--disable-shared && \
+		$(MAKE) -j$(NPROC)
+	rm -rf $(PREFIX)/lib/tkdnd$(TKDND_VER)
+	mkdir -p $(PREFIX)/lib/tkdnd$(TKDND_VER)
+	cp $(TKDND_SRC)/build/libtcl9tkdnd$(TKDND_VER).a $(PREFIX)/lib/tkdnd$(TKDND_VER)/
+	cp $(TKDND_SRC)/library/*.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
+	cp $(TKDND_SRC)/build/pkgIndex.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
+	sed -i 's|load $$dir/$$PKG_LIB_FILE|load {}|' $(PREFIX)/lib/tkdnd$(TKDND_VER)/tkdnd.tcl
 	touch $@
 
 # ==== KITSH launcher ====

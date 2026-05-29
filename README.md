@@ -95,6 +95,7 @@ Optional, any combination of:
 - `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps. See `IMG_INCLUDE` below to compile in only a subset of format readers.
 - `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. When combined with `mtls`, tclmtls is configured with `--with-mbedtls=` pointing at the rtc vendor prefix so both share a single mbedtls (avoids duplicate-symbol link errors).
 - `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too: rtcma consumes libdatachannel and mbedtls from rtc's vendor prefix instead of rebuilding them.
+- `tkdnd` — native drag-and-drop for Tk (X11 XDND). Requires `SHELL_TYPE=wish`.
 
 ### `TCLLIB_INCLUDE`
 
