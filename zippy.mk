@@ -126,7 +126,7 @@ RTCMA_SRC    := $(DEPSDIR)/rtc-ma
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
 OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
-OMEMO_COMMIT := 3edf2c619142ef8d9dfb843caf6b69980a3081cb
+OMEMO_COMMIT := 059a4f1dbe25ddcb3ee5b9c8d9756ac90ee1df03
 OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl
 
 # Tclwuffs. Memory-safe image decode/encode/resize on wuffs+stb. Two tiers:
