@@ -114,7 +114,19 @@ static int AppInit(Tcl_Interp *interp) {
     return TCL_OK;
 }
 
-int main(int argc, char **argv) {
+/* Wide-char entrypoint on Windows, plain 8-bit main elsewhere; the aliases
+ * keep the body shared. The Windows build must pass -municode — it provides
+ * wmain and defines UNICODE, which tcl.h needs to expose the wide-argv
+ * TclZipfs_AppHook/Tcl_MainExW signatures wmain expects. */
+#ifdef _WIN32
+#  define KITSH_CHAR wchar_t
+#  define KITSH_MAIN wmain
+#else
+#  define KITSH_CHAR char
+#  define KITSH_MAIN main
+#endif
+
+int KITSH_MAIN(int argc, KITSH_CHAR **argv) {
     /* Mounts the appended zip at //zipfs:/app and, if //zipfs:/app/main.tcl
      * exists, registers it as the startup script. Without this the launcher
      * falls through to Tk_Main's default REPL + empty toplevel. */
