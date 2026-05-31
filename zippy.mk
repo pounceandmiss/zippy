@@ -110,7 +110,7 @@ MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
 # install via find_package.
 RTC_VER    := 0.1.0
 RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
-RTC_COMMIT := 1570abea9498b72cb51201984e3b614b100c05d6
+RTC_COMMIT := 44d683117e8022d83e0ef4b8ea7fa0eb6c8829fa
 RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 
 # Rtcma (rtc-ma). Audio-over-libdatachannel adapter (miniaudio + opus +
@@ -120,7 +120,7 @@ RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 # DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := abeb0898466dcfaec01d134681e87f4fb2a56d9b
+RTCMA_COMMIT := 792e15c23db500da7869ab825a6868d9059b1caa
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma
 
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
