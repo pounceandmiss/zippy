@@ -53,9 +53,36 @@
 # ==== Paths ====
 ZIPPYDIR     := $(abspath $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST)))))
 BASEDIR      := $(CURDIR)
-BUILDDIR     := $(BASEDIR)/_build
+
+# ==== Target platform ====
+# TARGET_OS selects the build target; default (unset/linux) is the native build.
+# The Windows variables below are empty when TARGET_OS != windows, so the native
+# build is unchanged. TARGET_OS=windows cross-compiles a static PE via MinGW-w64;
+# the divergent Tcl/Tk + TEA package recipes live in windows.mk (included at the
+# bottom). The Windows tree sits under _build-win, separate from a native _build.
+TARGET_OS    ?= linux
+ifeq ($(TARGET_OS),windows)
+  WIN          := 1
+  CROSS        := x86_64-w64-mingw32
+  CROSS_BUILD  := x86_64-pc-linux-gnu
+  EXE_EXT      := .exe
+  BUILDDIR     := $(BASEDIR)/_build-win
+  # find_package/ExternalProject in the cmake deps need the mingw toolchain.
+  CMAKE_TOOLCHAIN := -DCMAKE_TOOLCHAIN_FILE=$(ZIPPYDIR)/mingw-toolchain.cmake
+else
+  WIN          :=
+  EXE_EXT      :=
+  BUILDDIR     := $(BASEDIR)/_build
+  CMAKE_TOOLCHAIN :=
+endif
+
 PREFIX       := $(BUILDDIR)/local
-DEPSDIR      := $(BUILDDIR)/deps
+# Sources are platform-neutral and expensive to fetch (libdatachannel pulls
+# large submodules), so they live in the native _build/deps and are shared
+# across targets. Build outputs isolate by BUILDDIR; in-tree configures isolate
+# by subdir (Tcl/Tk build in unix/ vs win/; the native build never TEA-builds
+# the bundled pkgs the Windows build does).
+DEPSDIR      := $(BASEDIR)/_build/deps
 BUILD_TCL    := $(ZIPPYDIR)/build.tcl
 
 SHELL_TYPE   ?= wish
@@ -110,7 +137,7 @@ MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
 # install via find_package.
 RTC_VER    := 0.1.0
 RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
-RTC_COMMIT := 44d683117e8022d83e0ef4b8ea7fa0eb6c8829fa
+RTC_COMMIT := 124d9c5442ca33d232a060ec9a61d5a4f238471e
 RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 
 # Rtcma (rtc-ma). Audio-over-libdatachannel adapter (miniaudio + opus +
@@ -120,7 +147,7 @@ RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 # DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 792e15c23db500da7869ab825a6868d9059b1caa
+RTCMA_COMMIT := 19ff9a8dd9689a9ad0c8487c8840419ddb47e529
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma
 
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
@@ -179,8 +206,29 @@ TK_SRC     := $(DEPSDIR)/tk$(TK_VER)
 TCLLIB_SRC := $(DEPSDIR)/tcllib-$(TCLLIB_VER)
 IMG_SRC    := $(DEPSDIR)/Img-$(IMG_VER)
 
+# omemo/tclwuffs build objects into their own source tree (no out-of-tree
+# support). Native builds there directly; the Windows cross-build works from an
+# isolated copy under $(BUILDDIR) so that sharing one DEPSDIR between a native
+# and a Windows build (same checkout) doesn't leave the cross-build linking the
+# native build's ELF objects (or vice versa). Native: BUILD == SRC, so the
+# KITSH_DEP_LIBS paths below are byte-identical to before.
+OMEMO_BUILD    := $(OMEMO_SRC)
+TCLWUFFS_BUILD := $(TCLWUFFS_SRC)
+ifdef WIN
+  OMEMO_BUILD    := $(BUILDDIR)/omemo
+  TCLWUFFS_BUILD := $(BUILDDIR)/tclwuffs
+endif
+
 TCLSH := $(PREFIX)/bin/tclsh$(TCL_BVER)
 WISH  := $(PREFIX)/bin/wish$(TK_BVER)
+ifdef WIN
+  # Cross-build: the host never runs these, and the win/ build installs
+  # tclsh90.exe/wish90.exe (not tclsh9.0), so the binary paths above would never
+  # match. Use stamp files as the Tcl/Tk completion markers instead; they only
+  # gate ordering (headers/stubs/archives present before deps link).
+  TCLSH := $(PREFIX)/.tcl_win_installed
+  WISH  := $(PREFIX)/.tk_win_installed
+endif
 
 NPROC := $(shell nproc 2>/dev/null || echo 4)
 
@@ -195,6 +243,26 @@ ifeq ($(GC_SECTIONS),1)
 else
   SIZE_CFLAGS  :=
   SIZE_LDFLAGS :=
+endif
+
+# Per-dep cmake C/C++ flag strings. Identical to SIZE_CFLAGS natively (so the
+# native cmake command is unchanged); the Windows static link needs extra
+# defines: STATIC_BUILD drops dllimport decoration, RTC_STATIC builds
+# libdatachannel static, OPUS_BUILD drops opus's __imp_ prefixes.
+RTC_CMAKE_FLAGS   := $(SIZE_CFLAGS)
+RTCMA_CMAKE_FLAGS := $(SIZE_CFLAGS)
+# cmake --build target selection. Native builds the default (all), including
+# the shared rtc.dll/rtcma module. Those don't link under mingw (usrsctp's
+# GetAdaptersAddresses needs -liphlpapi, which isn't wired for the .dll) and
+# aren't needed; the static kitsh link uses only the *_static archives. So
+# Windows builds just those targets.
+RTC_BUILD_TARGETS   :=
+RTCMA_BUILD_TARGETS :=
+ifdef WIN
+  RTC_CMAKE_FLAGS     := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
+  RTCMA_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC -DOPUS_BUILD
+  RTC_BUILD_TARGETS   := --target rtc_tcl_static
+  RTCMA_BUILD_TARGETS := --target rtcma rtcma_tcl_static
 endif
 
 # ==== Dependency mapping ====
@@ -355,8 +423,15 @@ ifneq (,$(filter img,$(DEPS)))
   _IMG_LIB_pngtcl  = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9pngtcl$(IMG_PNG_VER).a
   _IMG_LIB_jpegtcl = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9jpegtcl$(IMG_JPEG_VER).a
   _IMG_LIB_tifftcl = $(PREFIX)/lib/Img$(IMG_VER)/libtcl9tifftcl$(IMG_TIFF_VER).a
+ifdef WIN
+  # The Windows TEA build names archives without dots (libtcl9tkimg211.a), so
+  # match them by wildcard. --start-group resolves link order and --gc-sections
+  # drops the format modules not gated in via WITH_IMG_*.
+  KITSH_DEP_LIBS  += $(wildcard $(PREFIX)/lib/Img$(IMG_VER)/libtcl9*.a)
+else
   KITSH_DEP_LIBS  += $(foreach b,$(IMG_BASE_PKGS),$(_IMG_LIB_$(b))) \
                      $(foreach f,$(IMG_FORMATS),$(PREFIX)/lib/Img$(IMG_VER)/libtcl9tkimg$(f)$(IMG_VER).a)
+endif
 endif
 
 # Linker driver — gcc by default. Rtc / rtcma (C++) flip us to g++ +
@@ -393,10 +468,11 @@ ifneq (,$(filter rtcma,$(DEPS)))
 endif
 ifneq (,$(filter omemo,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_OMEMO
-  # Built in-tree under OMEMO_SRC — picomemo's Makefile drops the archive
+  # Built in-tree under OMEMO_BUILD — picomemo's Makefile drops the archive
   # next to the source. Lazy expansion is fine, the recipe below produces it
-  # before kitsh links.
-  KITSH_DEP_LIBS  += $(OMEMO_SRC)/libtcl9omemo$(OMEMO_VER).a
+  # before kitsh links. OMEMO_BUILD == OMEMO_SRC natively; under WIN it is an
+  # isolated copy so the cross-build never links the native build's objects.
+  KITSH_DEP_LIBS  += $(OMEMO_BUILD)/libtcl9omemo$(OMEMO_VER).a
 endif
 
 # Shared mbedtls archives. mtls/rtc/omemo reference these symbols without
@@ -410,11 +486,11 @@ endif
 
 ifneq (,$(filter tclwuffs,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_TCLWUFFS
-  KITSH_DEP_LIBS  += $(TCLWUFFS_SRC)/libtclwuffs$(TCLWUFFS_VER).a
+  KITSH_DEP_LIBS  += $(TCLWUFFS_BUILD)/libtclwuffs$(TCLWUFFS_VER).a
 endif
 ifneq (,$(filter tkwuffs,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_TKWUFFS
-  KITSH_DEP_LIBS  += $(TCLWUFFS_SRC)/libtkwuffs$(TCLWUFFS_VER).a
+  KITSH_DEP_LIBS  += $(TCLWUFFS_BUILD)/libtkwuffs$(TCLWUFFS_VER).a
 endif
 ifneq (,$(filter tkdnd,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_TKDND
@@ -450,8 +526,15 @@ ifneq (,$(filter tkdnd,$(DEPS)))
   KITSH_TK_SYSLIBS += -lXcursor
 endif
 
-KITSH_TCLSH := $(BUILDDIR)/kitsh_tclsh
-KITSH_WISH  := $(BUILDDIR)/kitsh_wish
+KITSH_TCLSH := $(BUILDDIR)/kitsh_tclsh$(EXE_EXT)
+KITSH_WISH  := $(BUILDDIR)/kitsh_wish$(EXE_EXT)
+ifdef WIN
+  # The Windows launchers are intermediates: they have no script library and
+  # error if run directly. Keep them out of $(BUILDDIR)'s top so the only exes
+  # there are the runnable, library-bundled wish.exe/tclsh.exe (see windows.mk).
+  KITSH_TCLSH := $(BUILDDIR)/_launcher/kitsh_tclsh$(EXE_EXT)
+  KITSH_WISH  := $(BUILDDIR)/_launcher/kitsh_wish$(EXE_EXT)
+endif
 
 # ==== Select base interpreter ====
 ifeq ($(SHELL_TYPE),tclsh)
@@ -585,7 +668,9 @@ $(IMG_SRC): $(DEPSDIR)/$(IMG_TAR)
 	touch $@
 
 # ==== Build Tcl/Tk ====
-
+# Native builds in unix/; the Windows cross-build (win/) lives in windows.mk,
+# so these native recipes are guarded out when WIN is set.
+ifndef WIN
 $(TCLSH): $(TCL_SRC)
 	cd $(TCL_SRC)/unix && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
@@ -605,8 +690,13 @@ $(WISH): $(TK_SRC) $(TCLSH)
 		$(MAKE) install && \
 		$(MAKE) install-libraries
 
+endif
+
 # ==== Build extensions ====
 
+# tdom (and the other compiled extensions below) build natively here; the
+# Windows cross-build variants live in windows.mk, so guard the native recipe.
+ifndef WIN
 $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
 	cd $$(ls -d $(DEPSDIR)/tdom-*/) && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
@@ -614,16 +704,23 @@ $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	touch $@
+endif
 
+# `make install` also builds tcllib's optional critcl C accelerators, which
+# can't cross-compile (it shells out for a target tclsh.exe). Windows installs
+# the pure-Tcl modules only (install-tcl); see windows.mk.
+ifndef WIN
 $(PREFIX)/.tcllib_installed: $(TCLLIB_SRC) $(TCLSH)
 	cd $(TCLLIB_SRC) && \
 		./configure --prefix=$(PREFIX) && \
 		$(MAKE) install
 	touch $@
+endif
 
 # Builds against zippy's shared mbedtls, not mtls's own submodule.
 # MBEDTLS_USER_CONFIG_FILE must match what libmbedtls.a was compiled with,
 # otherwise struct layouts diverge between mtls and libmbedtls.
+ifndef WIN
 $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 	mkdir -p $(MTLS_SRC)/build
 	cd $(MTLS_SRC)/build && \
@@ -634,6 +731,7 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install
 	touch $@
+endif
 
 # Img: configure with --disable-shared builds .a files but its `make install`
 # target only assembles the umbrella pkgIndex.tcl in shared builds. We install
@@ -642,6 +740,7 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 # Tcl_StaticPackage entries in kitsh.c.
 IMG_PKGINDEX_TCL := $(ZIPPYDIR)/img_pkgindex.tcl
 
+ifndef WIN
 $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 	mkdir -p $(IMG_SRC)/build
 	cd $(IMG_SRC)/build && \
@@ -658,11 +757,12 @@ $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 		$(IMG_VER) $(IMG_ZLIB_VER) $(IMG_PNG_VER) $(IMG_JPEG_VER) $(IMG_TIFF_VER) \
 		"$(IMG_BASE_PKGS)" "$(IMG_FORMATS)"
 	touch $@
+endif
 
 # MBEDTLS_USER_CONFIG_FILE propagates as a PUBLIC compile def to consumers
 # via find_package(MbedTLS), so all callers see matching struct layouts.
 $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
-	cmake -S $(MBEDTLS_SRC) -B $(BUILDDIR)/mbedtls \
+	cmake -S $(MBEDTLS_SRC) -B $(BUILDDIR)/mbedtls $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
@@ -681,14 +781,14 @@ $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
 # into static archives under the build tree's vendor/lib; mbedtls is
 # resolved via find_package against $(PREFIX).
 $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(PREFIX)/.mbedtls_installed
-	cmake -S $(RTC_SRC) -B $(BUILDDIR)/rtc \
+	cmake -S $(RTC_SRC) -B $(BUILDDIR)/rtc $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTC_BUNDLE_LIBDATACHANNEL=ON \
-		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)" \
-		-DCMAKE_CXX_FLAGS="$(SIZE_CFLAGS)" \
+		-DCMAKE_C_FLAGS="$(RTC_CMAKE_FLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(RTC_CMAKE_FLAGS)" \
 		-DCMAKE_PREFIX_PATH=$(PREFIX)
-	cmake --build $(BUILDDIR)/rtc -j$(NPROC)
+	cmake --build $(BUILDDIR)/rtc -j$(NPROC) $(RTC_BUILD_TARGETS)
 	mkdir -p $(PREFIX)
 	touch $@
 
@@ -704,22 +804,23 @@ $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(PREFIX)/.mbedtls_installed
 # install exists before rtcma's configure runs; the DEP_STAMPS block
 # above already errors out at make-parse time if rtc isn't in DEPS.
 $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(PREFIX)/.rtc_installed
-	cmake -S $(RTCMA_SRC) -B $(BUILDDIR)/rtcma \
+	cmake -S $(RTCMA_SRC) -B $(BUILDDIR)/rtcma $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTCMA_BUNDLE_OPUS=ON \
 		-DRTCMA_BUILD_TCL=ON \
-		-DCMAKE_C_FLAGS="$(SIZE_CFLAGS)" \
-		-DCMAKE_CXX_FLAGS="$(SIZE_CFLAGS)" \
+		-DCMAKE_C_FLAGS="$(RTCMA_CMAKE_FLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(RTCMA_CMAKE_FLAGS)" \
 		-DLibDataChannel_DIR=$(BUILDDIR)/rtc/vendor/lib/cmake/LibDataChannel \
 		-DMbedTLS_DIR=$(PREFIX)/lib/cmake/MbedTLS \
 		-DCMAKE_PREFIX_PATH='$(PREFIX);$(BUILDDIR)/rtc/vendor'
-	cmake --build $(BUILDDIR)/rtcma -j$(NPROC)
+	cmake --build $(BUILDDIR)/rtcma -j$(NPROC) $(RTCMA_BUILD_TARGETS)
 	mkdir -p $(PREFIX)
 	touch $@
 
 # Shell out to picomemo's own Makefile. -fPIC overrides its STATIC_CF
 # default so the archive links into our PIE kitsh binary.
+ifndef WIN
 $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 	$(MAKE) -C $(OMEMO_SRC) libtcl9omemo$(OMEMO_VER).a \
 		TCL_PREFIX=$(PREFIX) \
@@ -727,6 +828,7 @@ $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 		CFLAGS="-fPIC $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
+endif
 
 # Point TC{L,K}CONFIG at our install so tclwuffs's autodetect picks our
 # static headers/stubs over any system Tcl/Tk. -fPIC overrides upstream's
@@ -738,6 +840,7 @@ ifneq (,$(filter tkwuffs,$(DEPS)))
   TCLWUFFS_EXTRA_DEPS   := $(WISH)
 endif
 
+ifndef WIN
 $(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
 		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
@@ -745,6 +848,7 @@ $(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 		CFLAGS="-fPIC $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
+endif
 
 # A static (--disable-shared) `make install` skips pkgIndex.tcl (gated on a
 # shared build), as with Img, so the lib dir is installed manually: the archive,
@@ -755,6 +859,7 @@ $(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 # STATIC_PKGS — its own pkgIndex already registers `package ifneeded`. Tk
 # private headers (tkInt.h) come from the Tk source tree via tkConfig.sh's
 # TK_SRC_DIR, hence the $(WISH) dependency.
+ifndef WIN
 $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 	mkdir -p $(TKDND_SRC)/build
 	cd $(TKDND_SRC)/build && \
@@ -770,6 +875,7 @@ $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 	cp $(TKDND_SRC)/build/pkgIndex.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
 	sed -i 's|load $$dir/$$PKG_LIB_FILE|load {}|' $(PREFIX)/lib/tkdnd$(TKDND_VER)/tkdnd.tcl
 	touch $@
+endif
 
 # ==== KITSH launcher ====
 
@@ -782,12 +888,14 @@ $(if $(filter 1,$(STRIP)),objcopy --only-keep-debug $(1) $(1).debug && strip -s 
 endef
 
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
+	mkdir -p $(@D)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TCL_LIBS) -Wl,--end-group \
 		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)
 
 $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
+	mkdir -p $(@D)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		-Wl,--start-group $(KITSH_TK_LIBS) -Wl,--end-group \
 		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
@@ -837,6 +945,14 @@ clean:
 ifdef BIN_NAME
 	rm -f $(BASEDIR)/$(BIN_NAME) $(BASEDIR)/$(BIN_NAME).debug
 endif
-	rm -f $(BASEDIR)/wish $(BASEDIR)/wish.debug $(BASEDIR)/tclsh $(BASEDIR)/tclsh.debug
+	rm -f $(BASEDIR)/wish$(EXE_EXT) $(BASEDIR)/wish$(EXE_EXT).debug \
+	      $(BASEDIR)/tclsh$(EXE_EXT) $(BASEDIR)/tclsh$(EXE_EXT).debug
 
 distclean: clean
+
+# ==== Windows cross-build ====
+# Tcl/Tk (win/) + thread/sqlite3 TEA recipes and the kitsh link-var overrides.
+# Included last so its KITSH_* assignments take precedence. No-op when native.
+ifdef WIN
+include $(ZIPPYDIR)/windows.mk
+endif

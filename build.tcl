@@ -68,10 +68,22 @@ lassign $argv shell baseDir outFile sources entryScript excludes staticPkgs
 set libDirs [lrange $argv 7 end]
 
 # ==== Resolve paths ====
-set buildDir [file join $baseDir _build]
+# Build dir and base-interpreter suffix come from the environment so a cross
+# target can bundle from a host tclsh (Windows uses _build-win and a .exe base
+# interpreter); unset means the native _build with no suffix.
+set buildDir [expr {[info exists ::env(ZIPPY_BUILDDIR)]
+    ? $::env(ZIPPY_BUILDDIR) : [file join $baseDir _build]}]
 set prefix [file join $buildDir local]
+set exeExt [expr {[info exists ::env(ZIPPY_EXE_EXT)] ? $::env(ZIPPY_EXE_EXT) : ""}]
 
-set baseInterp [file join $buildDir kitsh_$shell]
+# ZIPPY_BASE_INTERP lets the caller point at a launcher kept outside buildDir
+# (the Windows build hides its launchers in a subdir so only the runnable exes
+# sit at the top); default is the native location.
+if {[info exists ::env(ZIPPY_BASE_INTERP)]} {
+    set baseInterp $::env(ZIPPY_BASE_INTERP)
+} else {
+    set baseInterp [file join $buildDir kitsh_$shell]$exeExt
+}
 
 # ==== Build exclude set ====
 set excludeSet [list]

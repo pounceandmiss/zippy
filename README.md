@@ -167,3 +167,40 @@ make -C zippy -f zippy.mk test
 ```
 
 See `tests/smoke.sh` for the assertions.
+
+## Windows (cross-build)
+
+`TARGET_OS=windows` cross-compiles a static Windows `.exe` from Linux via
+MinGW-w64. The whole Windows tree is isolated under `_build-win/`; a native
+`_build/` is untouched.
+
+Extra prerequisites: the MinGW-w64 cross toolchain (`x86_64-w64-mingw32-gcc`,
+`...-g++`, binutils) and a host `tclsh9.0` (used to bundle the script library
+into the exe; override with `HOST_TCLSH=...`).
+
+```
+make -f zippy.mk TARGET_OS=windows win-wish  DEPS="rtc rtcma"   # -> ./wish.exe
+make -f zippy.mk TARGET_OS=windows win-tclsh DEPS="rtc rtcma"   # -> ./tclsh.exe
+make -f zippy.mk TARGET_OS=windows win-test  DEPS="rtc rtcma"   # smoke test under wine
+```
+
+To build an app (a `BIN_NAME` project) for Windows, pass `TARGET_OS=windows`
+and the `win-app` target the same way you invoke `app` natively; the output is
+`$(BIN_NAME).exe`:
+
+```
+make -f zippy/zippy.mk TARGET_OS=windows BIN_NAME=myapp \
+    SHELL_TYPE=wish DEPS="..." SOURCES="..." ENTRY_SCRIPT=main.tcl win-app
+```
+
+The output is a self-contained PE32+: libstdc++/libwinpthread and all C/C++
+deps are linked statically, and the Tcl/Tk script library is appended to the
+exe as a zipfs, so there are no DLLs or support files to ship alongside it. It
+depends only on standard Windows system DLLs plus the UCRT, which is built into
+Windows 10/11 (older Windows needs the UCRT redistributable).
+
+All deps are supported on Windows (`tdom`, `tcllib`, `mtls`, `img`, `rtc`,
+`rtcma`, `omemo`, `tclwuffs`, `tkwuffs`, `tkdnd`, plus the always-linked
+`thread`/`sqlite3`); `tkdnd` uses its win32/OLE backend. The cross-build recipes
+live in `windows.mk`; assertions are in `tests/smoke-win.sh`. The bundling step
+needs a host `tclsh9.0`.

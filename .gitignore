@@ -2,5 +2,10 @@
 \#*\#
 .\#*
 _build/
+_build-win/
 /tclsh
 /wish
+/tclsh.exe
+/wish.exe
+/tclsh.debug
+/wish.debug
