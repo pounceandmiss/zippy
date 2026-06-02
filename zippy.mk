@@ -137,8 +137,13 @@ MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
 # install via find_package.
 RTC_VER    := 0.1.0
 RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
-RTC_COMMIT := 124d9c5442ca33d232a060ec9a61d5a4f238471e
+RTC_COMMIT := 77a9111abf208c6e41895ca093d6a1b03e764c5a
 RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
+
+# libdatachannel: rtc's WebRTC core, pre-staged so its cmake builds offline.
+LIBDC_REPO   := https://github.com/paullouisageneau/libdatachannel.git
+LIBDC_COMMIT := c47f5d77c124c35c31ac8378ad613295a124d354
+LIBDC_SRC    := $(DEPSDIR)/libdatachannel
 
 # Rtcma (rtc-ma). Audio-over-libdatachannel adapter (miniaudio + opus +
 # jitter buffer + SDP) with its own Tcl 9 binding. Built via cmake with
@@ -147,8 +152,15 @@ RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 # DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 19ff9a8dd9689a9ad0c8487c8840419ddb47e529
+RTCMA_COMMIT := 6f1455f16947de8339835026c0f9ac1b5e038ef8
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma
+
+# opus: rtc-ma's audio codec, pre-staged tarball so its cmake builds offline.
+OPUS_VER    := 1.6.1
+OPUS_TAR    := opus-$(OPUS_VER).tar.gz
+OPUS_URL    := https://downloads.xiph.org/releases/opus/$(OPUS_TAR)
+OPUS_SHA256 := 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
+OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
@@ -161,7 +173,7 @@ OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl
 # glue lives only in libtclwuffs.a.
 TCLWUFFS_VER    := 0.1.0
 TCLWUFFS_REPO   := https://github.com/pounceandmiss/tclwuffs.git
-TCLWUFFS_COMMIT := 901eda7a67bef4c92a4f036fa347325b3ea93019
+TCLWUFFS_COMMIT := c1d3eee88d6dec9161555e6df7e9cc3ea2348542
 TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs
 
 # Tkdnd. Native drag-and-drop for Tk (X11 XDND). TEA build that also ships Tcl
@@ -625,6 +637,10 @@ $(RTC_SRC):
 	git clone $(RTC_REPO) $(RTC_SRC)
 	cd $(RTC_SRC) && git checkout $(RTC_COMMIT) && git submodule update --init --recursive
 
+$(LIBDC_SRC):
+	git clone $(LIBDC_REPO) $(LIBDC_SRC)
+	cd $(LIBDC_SRC) && git checkout $(LIBDC_COMMIT) && git submodule update --init --recursive
+
 $(RTCMA_SRC):
 	git clone $(RTCMA_REPO) $(RTCMA_SRC)
 	cd $(RTCMA_SRC) && git checkout $(RTCMA_COMMIT) && git submodule update --init --recursive
@@ -646,7 +662,12 @@ $(DEPSDIR)/$(IMG_TAR):
 	curl -L -o $@ "$(IMG_URL)"
 	echo "$(IMG_SHA256)  $@" | sha256sum -c
 
-download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(RTCMA_SRC) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
+$(DEPSDIR)/$(OPUS_TAR):
+	mkdir -p $(DEPSDIR)
+	curl -L -o $@ $(OPUS_URL)
+	echo "$(OPUS_SHA256)  $@" | sha256sum -c
+
+download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(LIBDC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(OPUS_TAR) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
 
 # ==== Extract ====
 
@@ -667,6 +688,10 @@ $(DEPSDIR)/.tdom_extracted: $(DEPSDIR)/$(TDOM_TAR)
 	touch $@
 
 $(IMG_SRC): $(DEPSDIR)/$(IMG_TAR)
+	tar xzf $< -C $(DEPSDIR)
+	touch $@
+
+$(OPUS_SRC): $(DEPSDIR)/$(OPUS_TAR)
 	tar xzf $< -C $(DEPSDIR)
 	touch $@
 
@@ -769,6 +794,7 @@ $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
+		-DCMAKE_INSTALL_LIBDIR=lib \
 		-DENABLE_PROGRAMS=OFF \
 		-DENABLE_TESTING=OFF \
 		-DUSE_SHARED_MBEDTLS_LIBRARY=OFF \
@@ -783,11 +809,12 @@ $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
 # RTC_BUNDLE_LIBDATACHANNEL=ON rebuilds libdatachannel/juice/srtp2/usrsctp
 # into static archives under the build tree's vendor/lib; mbedtls is
 # resolved via find_package against $(PREFIX).
-$(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(PREFIX)/.mbedtls_installed
+$(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(LIBDC_SRC) $(PREFIX)/.mbedtls_installed
 	cmake -S $(RTC_SRC) -B $(BUILDDIR)/rtc $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTC_BUNDLE_LIBDATACHANNEL=ON \
+		-DRTC_LIBDATACHANNEL_SOURCE_DIR=$(LIBDC_SRC) \
 		-DCMAKE_C_FLAGS="$(RTC_CMAKE_FLAGS)" \
 		-DCMAKE_CXX_FLAGS="$(RTC_CMAKE_FLAGS)" \
 		-DCMAKE_PREFIX_PATH=$(PREFIX)
@@ -806,11 +833,12 @@ $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(PREFIX)/.mbedtls_installed
 # The order-only dependency on .rtc_installed makes sure rtc's vendor
 # install exists before rtcma's configure runs; the DEP_STAMPS block
 # above already errors out at make-parse time if rtc isn't in DEPS.
-$(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(PREFIX)/.rtc_installed
+$(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_installed
 	cmake -S $(RTCMA_SRC) -B $(BUILDDIR)/rtcma $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTCMA_BUNDLE_OPUS=ON \
+		-DRTCMA_OPUS_SOURCE_DIR=$(OPUS_SRC) \
 		-DRTCMA_BUILD_TCL=ON \
 		-DCMAKE_C_FLAGS="$(RTCMA_CMAKE_FLAGS)" \
 		-DCMAKE_CXX_FLAGS="$(RTCMA_CMAKE_FLAGS)" \
