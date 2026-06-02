@@ -441,6 +441,9 @@ KITSH_LD              := gcc
 KITSH_KITSH_LANG      :=
 KITSH_KITSH_LANG_END  :=
 KITSH_EXTRA_LDFLAGS   :=
+# Extra objects for the kitsh link. Empty natively; windows.mk adds a
+# windres-compiled icon resource here when WIN_ICON is set.
+KITSH_EXTRA_OBJS      :=
 
 # rtc bundles libdatachannel/juice/srtp2/usrsctp in $(RTC_BUILD)/vendor; mbedtls
 # is consumed via find_package from $(PREFIX) (built by .mbedtls_installed) and
@@ -890,6 +893,7 @@ endef
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
 	mkdir -p $(@D)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
+		$(KITSH_EXTRA_OBJS) \
 		-Wl,--start-group $(KITSH_TCL_LIBS) -Wl,--end-group \
 		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)
@@ -897,6 +901,7 @@ $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
 $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
 	mkdir -p $(@D)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
+		$(KITSH_EXTRA_OBJS) \
 		-Wl,--start-group $(KITSH_TK_LIBS) -Wl,--end-group \
 		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)

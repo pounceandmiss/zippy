@@ -1,6 +1,6 @@
 # Zippy
 
-Super simple build system for self-contained Tcl/Tk executables using zipfs.
+Build system for self-contained Tcl/Tk executables using zipfs.
 
 Downloads and compiles Tcl, Tk, and selected extensions from source, then packages everything into a single binary.
 
@@ -73,7 +73,7 @@ image, except for built-in excludes (the zippy directory, `_build/`,
 
 ### `APP_EXCLUDE`
 
-Space-separated list of additional file/directory names to exclude from the
+Space-separated list of file/directory names to exclude from the
 bundle. Built-in excludes are always applied; this adds to them.
 
 ```makefile
@@ -93,8 +93,8 @@ Optional, any combination of:
 - `tcllib` — standard Tcl library collection
 - `mtls` — TLS via mbedTLS
 - `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps. See `IMG_INCLUDE` below to compile in only a subset of format readers.
-- `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. When combined with `mtls`, tclmtls is configured with `--with-mbedtls=` pointing at the rtc vendor prefix so both share a single mbedtls (avoids duplicate-symbol link errors).
-- `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too: rtcma consumes libdatachannel and mbedtls from rtc's vendor prefix instead of rebuilding them.
+- `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. 
+- `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too.
 - `tkdnd` — native drag-and-drop for Tk (X11 XDND). Requires `SHELL_TYPE=wish`.
 
 ### `TCLLIB_INCLUDE`
@@ -137,7 +137,6 @@ The Img build itself still compiles every subdir — the whitelist only affects 
 | `make download` |           | Download all source tarballs           |
 | `make test`     |           | Run the integration smoke test         |
 | `make clean`    |           | Remove `_build/` and built binaries    |
-| `make distclean`|           | Same as clean                          |
 
 ## Standalone interpreter without a Makefile
 
@@ -193,14 +192,18 @@ make -f zippy/zippy.mk TARGET_OS=windows BIN_NAME=myapp \
     SHELL_TYPE=wish DEPS="..." SOURCES="..." ENTRY_SCRIPT=main.tcl win-app
 ```
 
-The output is a self-contained PE32+: libstdc++/libwinpthread and all C/C++
-deps are linked statically, and the Tcl/Tk script library is appended to the
-exe as a zipfs, so there are no DLLs or support files to ship alongside it. It
-depends only on standard Windows system DLLs plus the UCRT, which is built into
-Windows 10/11 (older Windows needs the UCRT redistributable).
+The output is a self-contained `.exe`.
 
-All deps are supported on Windows (`tdom`, `tcllib`, `mtls`, `img`, `rtc`,
-`rtcma`, `omemo`, `tclwuffs`, `tkwuffs`, `tkdnd`, plus the always-linked
-`thread`/`sqlite3`); `tkdnd` uses its win32/OLE backend. The cross-build recipes
-live in `windows.mk`; assertions are in `tests/smoke-win.sh`. The bundling step
-needs a host `tclsh9.0`.
+All deps are supported on Windows. The bundling step needs a host
+`tclsh9.0`.
+
+### `WIN_ICON`
+
+Path to an `.ico` file for the exe's icon. `windres` links it into the
+launcher, so it applies to `win-wish`, `win-tclsh`, and `win-app`:
+
+```
+make -f zippy.mk TARGET_OS=windows BIN_NAME=myapp WIN_ICON=$(pwd)/app.ico win-app
+```
+
+Must be an `.ico`.

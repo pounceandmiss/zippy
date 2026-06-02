@@ -241,8 +241,30 @@ KITSH_SYSLIBS := -static \
     -lwinmm -lgdi32 -lcomdlg32 -limm32 -lcomctl32 -lshell32 -luxtheme \
     -ldwmapi -lwinspool -liphlpapi -lcrypt32 -lsecur32 -lncrypt -lwinhttp \
     -ldnsapi -lstdc++ -lwinpthread -lssp -lm
-KITSH_TK_SYSLIBS    :=
+
+# Mark the wish launcher as a GUI-subsystem PE
+KITSH_TK_SYSLIBS    := -Wl,--subsystem,windows
 KITSH_EXTRA_LDFLAGS := -municode
+
+# ==== Executable icon ====
+# WIN_ICON=/path/to/app.ico links an icon into the launcher. windres
+# turns a generated .rc referencing the .ico into a COFF object; the
+# lowest-id ICON resource (1 here) becomes the application icon. It
+# has to go into the kitsh link, not the bundling step: build.tcl only
+# appends the zipfs payload, it never relinks the PE.
+WINDRES ?= $(CROSS)-windres
+ifdef WIN_ICON
+KITSH_ICON_RC  := $(BUILDDIR)/kitsh_icon.rc
+KITSH_ICON_OBJ := $(BUILDDIR)/kitsh_icon.o
+KITSH_EXTRA_OBJS += $(KITSH_ICON_OBJ)
+
+$(KITSH_ICON_OBJ): $(WIN_ICON)
+	mkdir -p $(@D)
+	printf '1 ICON "%s"\n' '$(abspath $(WIN_ICON))' > $(KITSH_ICON_RC)
+	$(WINDRES) -O coff -o $@ $(KITSH_ICON_RC)
+
+$(KITSH_WISH) $(KITSH_TCLSH): $(KITSH_ICON_OBJ)
+endif
 
 # ==== Bundle the script library into a runnable exe ====
 # The launcher alone can't boot: kitsh.c's TclZipfs_AppHook expects the Tcl/Tk
