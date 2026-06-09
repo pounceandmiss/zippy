@@ -17,11 +17,18 @@ THREAD_FLAT  := $(subst .,,$(THREAD_VER))
 SQLITE_FLAT  := $(subst .,,$(SQLITE3_VER))
 TKDND_FLAT   := $(subst .,,$(TKDND_VER))
 
-# Bundled-package source dirs (shared source tree) and the archives they emit.
+# Bundled-package source dirs (shared Tcl source tree) and the isolated copies
+# they cross-build in. The native build TEA-builds thread/sqlite/zlib in-tree,
+# so cross-building there too would cross-link ELF and PE objects and re-touch
+# the archive the kitsh link reads. Build in private copies under $(BUILDDIR).
 THREAD_PKG     := $(TCL_SRC)/pkgs/thread$(THREAD_VER)
 SQLITE_PKG     := $(TCL_SRC)/pkgs/sqlite$(SQLITE3_VER)
-THREAD_WIN_LIB := $(THREAD_PKG)/libtcl9thread$(THREAD_FLAT).a
-SQLITE_WIN_LIB := $(SQLITE_PKG)/libtcl9sqlite$(SQLITE_FLAT).a
+WIN_ZLIB_SRC   := $(TCL_SRC)/compat/zlib
+THREAD_BUILD   := $(BUILDDIR)/thread
+SQLITE_BUILD   := $(BUILDDIR)/sqlite
+WIN_ZLIB_BUILD := $(BUILDDIR)/zlib
+THREAD_WIN_LIB := $(THREAD_BUILD)/libtcl9thread$(THREAD_FLAT).a
+SQLITE_WIN_LIB := $(SQLITE_BUILD)/libtcl9sqlite$(SQLITE_FLAT).a
 WIN_LIBZ       := $(PREFIX)/lib/libz.a
 
 # ==== Tcl / Tk (win/ cross-build) ====
@@ -55,18 +62,29 @@ $(WISH): $(TK_SRC) $(TCLSH)
 
 # ==== thread / sqlite3 (TEA cross-build) ====
 # Natively Tcl's make install provides these; the win/ build doesn't, so
-# cross-build each via its TEA configure against the win/ tclConfig.sh. Built
-# in-tree (the native build never TEA-builds here). Feeds KITSH_BUNDLED_LIBS.
+# cross-build each via its TEA configure against the win/ tclConfig.sh, in an
+# isolated copy under $(BUILDDIR). The rm clears native config/objects so
+# configure regenerates them for mingw. Feeds KITSH_BUNDLED_LIBS.
 
 $(THREAD_WIN_LIB): $(TCLSH)
-	cd $(THREAD_PKG) && \
+	rm -rf $(THREAD_BUILD)
+	mkdir -p $(THREAD_BUILD)
+	cp -a $(THREAD_PKG)/. $(THREAD_BUILD)/
+	rm -f $(THREAD_BUILD)/*.o $(THREAD_BUILD)/*.a \
+		$(THREAD_BUILD)/config.status $(THREAD_BUILD)/config.cache $(THREAD_BUILD)/Makefile
+	cd $(THREAD_BUILD) && \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
 			--disable-shared --enable-threads && \
 		$(MAKE) -j$(NPROC)
 
 $(SQLITE_WIN_LIB): $(TCLSH)
-	cd $(SQLITE_PKG) && \
+	rm -rf $(SQLITE_BUILD)
+	mkdir -p $(SQLITE_BUILD)
+	cp -a $(SQLITE_PKG)/. $(SQLITE_BUILD)/
+	rm -f $(SQLITE_BUILD)/*.o $(SQLITE_BUILD)/*.a \
+		$(SQLITE_BUILD)/config.status $(SQLITE_BUILD)/config.cache $(SQLITE_BUILD)/Makefile
+	cd $(SQLITE_BUILD) && \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
 			--disable-shared && \
@@ -74,14 +92,19 @@ $(SQLITE_WIN_LIB): $(TCLSH)
 
 # ==== zlib ====
 # Tcl's bundled zlib symbols aren't exported, so the static link needs a
-# standalone libz.a. Cross-build it from Tcl's compat copy.
+# standalone libz.a. Cross-build it from an isolated copy of Tcl's compat copy
+# (the native build TEA-builds that dir in-tree), then install into $(PREFIX).
 $(WIN_LIBZ): $(TCL_SRC)
-	cd $(TCL_SRC)/compat/zlib && \
+	rm -rf $(WIN_ZLIB_BUILD)
+	mkdir -p $(WIN_ZLIB_BUILD)
+	cp -a $(WIN_ZLIB_SRC)/. $(WIN_ZLIB_BUILD)/
+	rm -f $(WIN_ZLIB_BUILD)/*.o $(WIN_ZLIB_BUILD)/*.a
+	cd $(WIN_ZLIB_BUILD) && \
 		CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib \
 		./configure --static && \
 		$(MAKE) -j$(NPROC) libz.a
 	mkdir -p $(PREFIX)/lib
-	cp $(TCL_SRC)/compat/zlib/libz.a $(WIN_LIBZ)
+	cp $(WIN_ZLIB_BUILD)/libz.a $(WIN_LIBZ)
 
 # ==== Compiled extensions (TEA cross-builds) ====
 # Each builds under $(BUILDDIR) against the win/ tclConfig.sh and installs into
