@@ -91,6 +91,12 @@ ENTRY_SCRIPT ?= main.tcl
 STRIP        ?= 1
 GC_SECTIONS  ?= 1
 
+# Where source patches live ($(PATCHES_DIR)/<tree>/*.patch; see "Source
+# patches"). $(CURDIR) is the consuming project's root, so a vendored zippy
+# reads patches from the app rather than its own tree. Not BASEDIR: a project
+# may repoint that at a build dir.
+PATCHES_DIR  ?= $(CURDIR)/patches
+
 # Backward-compat alias: APP_DIR → SOURCES (single entry).
 ifneq ($(origin APP_DIR),undefined)
   SOURCES := $(APP_DIR)
@@ -559,7 +565,7 @@ else
 endif
 
 # ==== Built-in excludes ====
-_BUILTIN_EXCLUDES := $(notdir $(ZIPPYDIR)) _build Makefile
+_BUILTIN_EXCLUDES := $(notdir $(ZIPPYDIR)) _build Makefile $(notdir $(PATCHES_DIR))
 ifdef BIN_NAME
   _BUILTIN_EXCLUDES += $(BIN_NAME)
 endif
@@ -669,30 +675,60 @@ $(DEPSDIR)/$(OPUS_TAR):
 
 download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(LIBDC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(OPUS_TAR) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
 
+# ==== Source patches ====
+# Patches in $(PATCHES_DIR)/<tree>/*.patch apply to that tree (tcl, tk, tcllib,
+# tdom, img, opus) with `patch -p1` in lexical order after extraction. They're
+# prerequisites of the extract rule, so a changed patch forces a clean
+# re-extract (rm -rf): patching over an existing tree leaves stale .o files
+# whose struct layouts no longer match the patched headers.
+patches-for    = $(sort $(wildcard $(PATCHES_DIR)/$(1)/*.patch))
+# $(call apply-patches,<tree-dir>,<patch-list>)
+apply-patches  = $(foreach p,$(2),patch -d $(1) -p1 < $(p) &&) true
+
+TCL_PATCHES    := $(call patches-for,tcl)
+TK_PATCHES     := $(call patches-for,tk)
+TCLLIB_PATCHES := $(call patches-for,tcllib)
+TDOM_PATCHES   := $(call patches-for,tdom)
+IMG_PATCHES    := $(call patches-for,img)
+OPUS_PATCHES   := $(call patches-for,opus)
+
 # ==== Extract ====
+# Clean-extract (rm -rf) then apply patches; see "Source patches".
 
-$(TCL_SRC): $(DEPSDIR)/$(TCL_TAR)
+$(TCL_SRC): $(DEPSDIR)/$(TCL_TAR) $(TCL_PATCHES)
+	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$@,$(TCL_PATCHES))
 	touch $@
 
-$(TK_SRC): $(DEPSDIR)/$(TK_TAR)
+$(TK_SRC): $(DEPSDIR)/$(TK_TAR) $(TK_PATCHES)
+	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$@,$(TK_PATCHES))
 	touch $@
 
-$(TCLLIB_SRC): $(DEPSDIR)/$(TCLLIB_TAR)
+$(TCLLIB_SRC): $(DEPSDIR)/$(TCLLIB_TAR) $(TCLLIB_PATCHES)
+	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$@,$(TCLLIB_PATCHES))
 	touch $@
 
-$(DEPSDIR)/.tdom_extracted: $(DEPSDIR)/$(TDOM_TAR)
+$(DEPSDIR)/.tdom_extracted: $(DEPSDIR)/$(TDOM_TAR) $(TDOM_PATCHES)
+	rm -rf $(DEPSDIR)/tdom-$(TDOM_VER)-src
 	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$(DEPSDIR)/tdom-$(TDOM_VER)-src,$(TDOM_PATCHES))
 	touch $@
 
-$(IMG_SRC): $(DEPSDIR)/$(IMG_TAR)
+$(IMG_SRC): $(DEPSDIR)/$(IMG_TAR) $(IMG_PATCHES)
+	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$@,$(IMG_PATCHES))
 	touch $@
 
-$(OPUS_SRC): $(DEPSDIR)/$(OPUS_TAR)
+$(OPUS_SRC): $(DEPSDIR)/$(OPUS_TAR) $(OPUS_PATCHES)
+	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$@,$(OPUS_PATCHES))
 	touch $@
 
 # ==== Build Tcl/Tk ====
