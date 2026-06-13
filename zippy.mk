@@ -527,7 +527,13 @@ ifneq (,$(filter rtc rtcma,$(DEPS)))
   KITSH_KITSH_LANG := -xc
   KITSH_KITSH_LANG_END := -xnone
   # See BundleDeps.cmake: fold libstdc++ static; leave libgcc_s dynamic.
-  KITSH_EXTRA_LDFLAGS := -static-libstdc++
+  # Platforms that only ship a shared C++ runtime (Android/Termux: libc++_shared.so,
+  # no static libstdc++) build with STATIC_LIBSTDCXX=0.
+  ifeq ($(STATIC_LIBSTDCXX),0)
+    KITSH_EXTRA_LDFLAGS :=
+  else
+    KITSH_EXTRA_LDFLAGS := -static-libstdc++
+  endif
 endif
 
 KITSH_TCL_LIBS = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
