@@ -44,8 +44,8 @@ $(TCLSH): $(TCL_SRC)
 			--with-system-libtommath=no && \
 		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
-		$(MAKE) install && \
-		$(MAKE) install-libraries
+		$(MAKE) install TCL_EXE=$(HOST_TCLSH) && \
+		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH)
 	touch $@
 
 $(WISH): $(TK_SRC) $(TCLSH)
@@ -56,8 +56,8 @@ $(WISH): $(TK_SRC) $(TCLSH)
 			--enable-zipfs --disable-shared && \
 		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
-		$(MAKE) install && \
-		$(MAKE) install-libraries
+		$(MAKE) install TCL_EXE=$(HOST_TCLSH) && \
+		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH)
 	touch $@
 
 # ==== thread / sqlite3 (TEA cross-build) ====
@@ -76,7 +76,7 @@ $(THREAD_WIN_LIB): $(TCLSH)
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
 			--disable-shared --enable-threads && \
-		$(MAKE) -j$(NPROC)
+		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 
 $(SQLITE_WIN_LIB): $(TCLSH)
 	rm -rf $(SQLITE_BUILD)
@@ -88,7 +88,7 @@ $(SQLITE_WIN_LIB): $(TCLSH)
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
 			--disable-shared && \
-		$(MAKE) -j$(NPROC)
+		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 
 # ==== zlib ====
 # Tcl's bundled zlib symbols aren't exported, so the static link needs a
@@ -120,7 +120,7 @@ $(WIN_LIBZ): $(TCL_SRC)
 $(PREFIX)/.tcllib_installed: $(TCLLIB_SRC) $(TCLSH)
 	cd $(TCLLIB_SRC) && \
 		./configure --prefix=$(PREFIX) && \
-		$(MAKE) install-tcl
+		$(MAKE) install-tcl TCLSH_PROG=$(HOST_TCLSH)
 	touch $@
 
 # Extract a pristine source under $(BUILDDIR) rather than building out-of-tree
@@ -136,8 +136,8 @@ $(PREFIX)/.tdom_installed: $(DEPSDIR)/$(TDOM_TAR) $(TCLSH)
 		CFLAGS="$(SIZE_CFLAGS)" \
 		$(BUILDDIR)/tdom-src/configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --with-tcl=$(TCL_SRC)/win --disable-shared && \
-		$(MAKE) -j$(NPROC) && \
-		$(MAKE) install
+		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
+		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH)
 	touch $@
 
 # Links against the cross-built Windows mbedtls in $(PREFIX) (same user-config
@@ -150,8 +150,8 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 			--prefix=$(PREFIX) --with-tcl=$(TCL_SRC)/win --disable-shared \
 			--with-mbedtls=$(PREFIX) \
 			CPPFLAGS='-DMBEDTLS_USER_CONFIG_FILE=\"$(MBEDTLS_USER_CFG)\"' && \
-		$(MAKE) -j$(NPROC) && \
-		$(MAKE) install
+		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
+		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH)
 	touch $@
 
 # picomemo's Makefile builds in-tree (objects in build/, archive at top), so
@@ -202,7 +202,7 @@ $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		$(IMG_SRC)/configure --host=$(CROSS) --build=$(CROSS_BUILD) --prefix=$(PREFIX) \
 			--with-tcl=$(PREFIX)/lib --with-tk=$(PREFIX)/lib --disable-shared && \
-		C_INCLUDE_PATH=$(BUILDDIR)/winshim $(MAKE) -j$(NPROC)
+		C_INCLUDE_PATH=$(BUILDDIR)/winshim $(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 	rm -rf $(PREFIX)/lib/Img$(IMG_VER)
 	mkdir -p $(PREFIX)/lib/Img$(IMG_VER)
 	find $(BUILDDIR)/img -name 'libtcl9*.a' -exec cp {} $(PREFIX)/lib/Img$(IMG_VER)/ \;
@@ -219,7 +219,7 @@ $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		$(TKDND_SRC)/configure --host=$(CROSS) --build=$(CROSS_BUILD) --prefix=$(PREFIX) \
 			--with-tcl=$(PREFIX)/lib --with-tk=$(PREFIX)/lib --disable-shared && \
-		$(MAKE) -j$(NPROC)
+		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 	rm -rf $(PREFIX)/lib/tkdnd$(TKDND_VER)
 	mkdir -p $(PREFIX)/lib/tkdnd$(TKDND_VER)
 	cp $(BUILDDIR)/tkdnd/libtcl9tkdnd$(TKDND_FLAT).a $(PREFIX)/lib/tkdnd$(TKDND_VER)/
@@ -238,7 +238,18 @@ $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 # by $(WISH). Adds prerequisites without redefining the recipe.
 $(KITSH_WISH) $(KITSH_TCLSH): $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB) $(WIN_LIBZ)
 
-KITSH_LD     := $(CROSS)-g++
+# C++ link driver, libstdc++ and the -xc wrapper only when a C++ dep (rtc/rtcma)
+# is linked, matching zippy.mk's native gating; a pure-C build links with gcc.
+# -xc keeps kitsh.c compiled as C under g++ so the extern <Pkg>_Init decls retain
+# C linkage.
+ifneq (,$(filter rtc rtcma,$(DEPS)))
+  KITSH_LD := $(CROSS)-g++
+  KITSH_KITSH_LANG     := -xc
+  KITSH_KITSH_LANG_END := -xnone
+  KITSH_WIN_CXXLIB := -lstdc++
+else
+  KITSH_LD := $(CROSS)-gcc
+endif
 # -municode at compile defines UNICODE, exposing the wide-argv Tk_Main/Tcl_Main
 # that match kitsh.c's wmain; STATIC_BUILD drops dllimport; RTC_STATIC for
 # libdatachannel. Do NOT define USE_TCL_STUBS/USE_TK_STUBS: tcl.h gates on
@@ -258,12 +269,13 @@ KITSH_TK_LIBS  = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
 
 # Windows GUI/system import libs replace the Unix X11/pthread/dl set. -static
 # links libstdc++/libwinpthread statically; -municode selects the wmain entry.
+# KITSH_WIN_CXXLIB is -lstdc++ only when a C++ dep is linked.
 # KITSH_TK_SYSLIBS folds in here (gdi32/comdlg32/... are syslibs).
 KITSH_SYSLIBS := -static \
     -lws2_32 -lnetapi32 -luserenv -lbcrypt -lole32 -loleaut32 -luuid \
     -lwinmm -lgdi32 -lcomdlg32 -limm32 -lcomctl32 -lshell32 -luxtheme \
     -ldwmapi -lwinspool -liphlpapi -lcrypt32 -lsecur32 -lncrypt -lwinhttp \
-    -ldnsapi -lstdc++ -lwinpthread -lssp -lm
+    -ldnsapi $(KITSH_WIN_CXXLIB) -lwinpthread -lssp -lm
 
 # Mark the wish launcher as a GUI-subsystem PE
 KITSH_TK_SYSLIBS    := -Wl,--subsystem,windows
