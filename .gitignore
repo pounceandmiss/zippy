@@ -3,6 +3,7 @@
 .\#*
 _build/
 _build-win/
+_build-docker/
 /tclsh
 /wish
 /tclsh.exe
