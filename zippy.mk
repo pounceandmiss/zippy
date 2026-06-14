@@ -63,12 +63,25 @@ BASEDIR      := $(CURDIR)
 TARGET_OS    ?= linux
 ifeq ($(TARGET_OS),windows)
   WIN          := 1
+  CROSS_OVERLAY := 1
   CROSS        := x86_64-w64-mingw32
   CROSS_BUILD  := x86_64-pc-linux-gnu
   EXE_EXT      := .exe
   BUILDDIR     := $(BASEDIR)/_build-win
   # find_package/ExternalProject in the cmake deps need the mingw toolchain.
   CMAKE_TOOLCHAIN := -DCMAKE_TOOLCHAIN_FILE=$(ZIPPYDIR)/mingw-toolchain.cmake
+else ifeq ($(TARGET_OS),android)
+  # CROSS is the autotools triple; the clang wrapper, ABI and platform live in
+  # android.mk. arm64-v8a only ships a shared libc++, so STATIC_LIBSTDCXX=0 (read
+  # by a parse-time ifeq below, so it stays in the seam).
+  ANDROID      := 1
+  CROSS_OVERLAY := 1
+  CROSS        := aarch64-linux-android
+  CROSS_BUILD  := x86_64-pc-linux-gnu
+  EXE_EXT      :=
+  BUILDDIR     := $(BASEDIR)/_build-android
+  STATIC_LIBSTDCXX := 0
+  CMAKE_TOOLCHAIN := -DCMAKE_TOOLCHAIN_FILE=$(ZIPPYDIR)/android-toolchain.cmake
 else
   WIN          :=
   EXE_EXT      :=
@@ -740,7 +753,7 @@ $(OPUS_SRC): $(DEPSDIR)/$(OPUS_TAR) $(OPUS_PATCHES)
 # ==== Build Tcl/Tk ====
 # Native builds in unix/; the Windows cross-build (win/) lives in windows.mk,
 # so these native recipes are guarded out when WIN is set.
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(TCLSH): $(TCL_SRC)
 	cd $(TCL_SRC)/unix && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
@@ -766,7 +779,7 @@ endif
 
 # tdom (and the other compiled extensions below) build natively here; the
 # Windows cross-build variants live in windows.mk, so guard the native recipe.
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
 	cd $$(ls -d $(DEPSDIR)/tdom-*/) && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
@@ -779,7 +792,7 @@ endif
 # `make install` also builds tcllib's optional critcl C accelerators, which
 # can't cross-compile (it shells out for a target tclsh.exe). Windows installs
 # the pure-Tcl modules only (install-tcl); see windows.mk.
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.tcllib_installed: $(TCLLIB_SRC) $(TCLSH)
 	cd $(TCLLIB_SRC) && \
 		./configure --prefix=$(PREFIX) && \
@@ -790,7 +803,7 @@ endif
 # Builds against zippy's shared mbedtls, not mtls's own submodule.
 # MBEDTLS_USER_CONFIG_FILE must match what libmbedtls.a was compiled with,
 # otherwise struct layouts diverge between mtls and libmbedtls.
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 	mkdir -p $(MTLS_SRC)/build
 	cd $(MTLS_SRC)/build && \
@@ -810,7 +823,7 @@ endif
 # Tcl_StaticPackage entries in kitsh.c.
 IMG_PKGINDEX_TCL := $(ZIPPYDIR)/img_pkgindex.tcl
 
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 	mkdir -p $(IMG_SRC)/build
 	cd $(IMG_SRC)/build && \
@@ -893,7 +906,7 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_ins
 
 # Shell out to picomemo's own Makefile. -fPIC overrides its STATIC_CF
 # default so the archive links into our PIE kitsh binary.
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 	$(MAKE) -C $(OMEMO_SRC) libtcl9omemo$(OMEMO_VER).a \
 		TCL_PREFIX=$(PREFIX) \
@@ -913,7 +926,7 @@ ifneq (,$(filter tkwuffs,$(DEPS)))
   TCLWUFFS_EXTRA_DEPS   := $(WISH)
 endif
 
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
 		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
@@ -932,7 +945,7 @@ endif
 # STATIC_PKGS — its own pkgIndex already registers `package ifneeded`. Tk
 # private headers (tkInt.h) come from the Tk source tree via tkConfig.sh's
 # TK_SRC_DIR, hence the $(WISH) dependency.
-ifndef WIN
+ifndef CROSS_OVERLAY
 $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 	mkdir -p $(TKDND_SRC)/build
 	cd $(TKDND_SRC)/build && \
@@ -956,8 +969,10 @@ endif
 # before build.tcl appends the zipfs payload — strip rewrites ELF section
 # layout, which would invalidate the absolute offsets in the appended ZIP
 # central directory. The sidecar is later copied next to the shipped binary.
+OBJCOPY  ?= objcopy
+STRIP_BIN ?= strip
 define maybe_strip_kitsh
-$(if $(filter 1,$(STRIP)),objcopy --only-keep-debug $(1) $(1).debug && strip -s $(1),true)
+$(if $(filter 1,$(STRIP)),$(OBJCOPY) --only-keep-debug $(1) $(1).debug && $(STRIP_BIN) -s $(1),true)
 endef
 
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
@@ -984,6 +999,9 @@ define maybe_copy_debug
 $(if $(filter 1,$(STRIP)),cp $(1).debug $(2).debug,true)
 endef
 
+# Native bundling runs $(TCLSH); a cross target can't (its interp is foreign), so
+# the overlays (windows.mk / android.mk) provide their own HOST_TCLSH bundlers.
+ifndef CROSS_OVERLAY
 ifdef BIN_NAME
 app: $(BASEDIR)/$(BIN_NAME)
 
@@ -1005,6 +1023,7 @@ tclsh: $(BASEDIR)/tclsh
 $(BASEDIR)/tclsh: $(KITSH_TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
 	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 	$(call maybe_copy_debug,$(KITSH_TCLSH),$@)
+endif
 
 # ==== Test ====
 # Smoke test that builds standalone tclsh/wish across DEPS combinations and
@@ -1030,4 +1049,11 @@ distclean: clean
 # Included last so its KITSH_* assignments take precedence. No-op when native.
 ifdef WIN
 include $(ZIPPYDIR)/windows.mk
+endif
+
+# ==== Android cross-build ====
+# Tcl + TEA recipes (unix/, --host=aarch64-linux-android) and the kitsh link-var
+# overrides for a bionic ELF. Included last so its KITSH_* assignments win.
+ifdef ANDROID
+include $(ZIPPYDIR)/android.mk
 endif
