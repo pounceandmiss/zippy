@@ -595,6 +595,14 @@ _ALL_EXCLUDES := $(_BUILTIN_EXCLUDES) $(APP_EXCLUDE)
 _EXCLUDES_CSV := $(subst $(eval ) ,$(shell echo ','),$(_ALL_EXCLUDES))
 _SOURCES_CSV  := $(subst $(eval ) ,$(shell echo ','),$(SOURCES))
 
+# Every file bundled into the zipfs, so the app binary rebuilds when a *script*
+# changes - not just a C source. Without this, a Tcl-only edit leaves the binary
+# looking up-to-date (its prereqs are the interpreter, dep stamps, and build.tcl),
+# so the change silently never makes it into the bundle. A touch here reruns only
+# build.tcl's re-bundle/link step; the dep compiles stay gated by their stamps.
+# (.git pruned so the default SOURCES=./ doesn't drag the whole history in.)
+APP_SRC_FILES := $(shell find $(SOURCES) -type f -not -path '*/.git/*' 2>/dev/null)
+
 # ==== Static-package wiring (pkg:loadname:version) ====
 # kitsh.c registers each via Tcl_StaticPackage; build.tcl turns this list into
 # a single pkgIndex.tcl so `package require` resolves through `load {} <name>`.
@@ -1008,7 +1016,7 @@ ifndef CROSS_OVERLAY
 ifdef BIN_NAME
 app: $(BASEDIR)/$(BIN_NAME)
 
-$(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL)
+$(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
 	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ $(_SOURCES_CSV) $(ENTRY_SCRIPT) $(_EXCLUDES_CSV) $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 	$(call maybe_copy_debug,$(BASE_INTERP),$@)
 endif
