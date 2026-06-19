@@ -159,7 +159,7 @@ MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
 # install via find_package.
 RTC_VER    := 0.1.0
 RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
-RTC_COMMIT := 77a9111abf208c6e41895ca093d6a1b03e764c5a
+RTC_COMMIT := 9ae99076fd98df9157637b54d98fbe9bfb4b7ce0
 RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
 
 # libdatachannel: rtc's WebRTC core, pre-staged so its cmake builds offline.
@@ -174,7 +174,7 @@ LIBDC_SRC    := $(DEPSDIR)/libdatachannel
 # DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 6f1455f16947de8339835026c0f9ac1b5e038ef8
+RTCMA_COMMIT := 2eccdecc04470a07dd326f2132c0cc1ede003ebe
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma
 
 # opus: rtc-ma's audio codec, pre-staged tarball so its cmake builds offline.
