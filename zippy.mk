@@ -665,9 +665,13 @@ $(MTLS_SRC):
 	git clone $(MTLS_REPO) $(MTLS_SRC)
 	cd $(MTLS_SRC) && git checkout $(MTLS_COMMIT) && git submodule update --init --recursive
 
-$(MBEDTLS_SRC):
+# Patches (if any) force a clean re-clone, mirroring the tarball extract rules:
+# patching over an existing checkout leaves stale .o files behind.
+$(MBEDTLS_SRC): $(MBEDTLS_PATCHES)
+	rm -rf $@
 	git clone $(MBEDTLS_REPO) $(MBEDTLS_SRC)
 	cd $(MBEDTLS_SRC) && git checkout $(MBEDTLS_COMMIT) && git submodule update --init --recursive
+	$(call apply-patches,$(MBEDTLS_SRC),$(MBEDTLS_PATCHES))
 
 $(RTC_SRC):
 	git clone $(RTC_REPO) $(RTC_SRC)
@@ -721,6 +725,7 @@ TCLLIB_PATCHES := $(call patches-for,tcllib)
 TDOM_PATCHES   := $(call patches-for,tdom)
 IMG_PATCHES    := $(call patches-for,img)
 OPUS_PATCHES   := $(call patches-for,opus)
+MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 
 # ==== Extract ====
 # Clean-extract (rm -rf) then apply patches; see "Source patches".
