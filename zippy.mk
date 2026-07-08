@@ -1018,11 +1018,21 @@ endef
 # Native bundling runs $(TCLSH); a cross target can't (its interp is foreign), so
 # the overlays (windows.mk / android.mk) provide their own HOST_TCLSH bundlers.
 ifndef CROSS_OVERLAY
+
+# build.tcl's argv in one place. CSVs hold commas, so they can't be $(call) args:
+# name them here, vary only shell type. bundle_bare = no app sources ($(1)=type).
+define bundle_app
+$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ "$(_SOURCES_CSV)" "$(ENTRY_SCRIPT)" "$(_EXCLUDES_CSV)" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+endef
+define bundle_bare
+$(TCLSH) $(BUILD_TCL) $(1) $(BASEDIR) $@ "" "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+endef
+
 ifdef BIN_NAME
 app: $(BASEDIR)/$(BIN_NAME)
 
 $(BASEDIR)/$(BIN_NAME): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
-	$(TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ $(_SOURCES_CSV) $(ENTRY_SCRIPT) $(_EXCLUDES_CSV) $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(bundle_app)
 	$(call maybe_copy_debug,$(BASE_INTERP),$@)
 endif
 
@@ -1031,15 +1041,81 @@ endif
 wish: $(BASEDIR)/wish
 
 $(BASEDIR)/wish: $(KITSH_WISH) $(DEP_STAMPS) $(BUILD_TCL)
-	$(TCLSH) $(BUILD_TCL) wish $(BASEDIR) $@ "" "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(call bundle_bare,wish)
 	$(call maybe_copy_debug,$(KITSH_WISH),$@)
 
 tclsh: $(BASEDIR)/tclsh
 
 $(BASEDIR)/tclsh: $(KITSH_TCLSH) $(DEP_STAMPS) $(BUILD_TCL)
-	$(TCLSH) $(BUILD_TCL) tclsh $(BASEDIR) $@ "" "" "" $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
+	$(call bundle_bare,tclsh)
 	$(call maybe_copy_debug,$(KITSH_TCLSH),$@)
+
 endif
+
+# ==== Static library ====
+# Emit a static archive (instead of a runnable binary) that a foreign C/C++ host
+# links: the SOURCES script tree lives in .rodata as a bare zip mounted via
+# TclZipfs_MountBuffer, merged with every static Tcl/dep archive. Shared by the
+# native build and the cross overlays - only the bare-zip bundling step (host
+# tclsh) and the binutils (KIT_LD/KIT_OBJCOPY/KIT_AR) differ per target, so an
+# overlay just overrides those vars and supplies its own $(SCRIPTS_ZIP) recipe.
+#
+# The project supplies the shim C source that drives the embedded interp:
+#   LIB_SHIM_SRC  path to the shim .c (required for the `lib` target)
+#   LIB_NAME      archive base name -> lib$(LIB_NAME).a  (default: BIN_NAME/app)
+# The shim may `#include "static_pkgs.h"` (zippy is added to its include path)
+# and call Zippy_RegisterStaticPackages(), and must reference the bundled zip as
+# `_binary_scripts_zip_{start,end}` (the `ld -b binary` symbols for scripts.zip).
+KIT_LD       ?= ld
+KIT_OBJCOPY  ?= $(OBJCOPY)
+KIT_AR       ?= $(AR)
+SCRIPTS_ZIP  := $(BUILDDIR)/scripts.zip
+SCRIPTS_OBJ  := $(BUILDDIR)/scripts.o
+SHIM_OBJ     := $(BUILDDIR)/shim.o
+LIB_NAME     ?= $(or $(BIN_NAME),app)
+LIBOUT       := $(BASEDIR)/lib$(LIB_NAME).a
+
+.PHONY: lib scripts-zip scripts-obj
+
+scripts-zip: $(SCRIPTS_ZIP)
+
+# Bare zipfs image of the SOURCES tree (ZIPPY_BASE_INTERP= => no prepended exe).
+# A cross overlay can't run its foreign target interp, so it replaces this recipe
+# with one driven by a host tclsh (windows.mk); native runs $(TCLSH) directly.
+ifndef CROSS_OVERLAY
+$(SCRIPTS_ZIP): $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
+	mkdir -p $(@D)
+	ZIPPY_BASE_INTERP= $(bundle_app)
+endif
+
+# Park the zip in .rodata (demand-paged, read-only). `ld -b binary` names its
+# symbols after the *input filename*, so run it from $(@D) with a bare name to
+# get _binary_scripts_zip_{start,end,size}. objcopy moves .data -> .rodata.
+scripts-obj: $(SCRIPTS_OBJ)
+$(SCRIPTS_OBJ): $(SCRIPTS_ZIP)
+	cd $(@D) && $(KIT_LD) -r -b binary -o $(@F) $(<F)
+	$(KIT_OBJCOPY) --rename-section .data=.rodata,alloc,load,readonly,data,contents $@
+
+# The project's shim, compiled as C even under the g++ link driver via
+# -xc/-xnone, with the same -DWITH_* flags as the launcher (so its static-package
+# set matches) plus -I$(ZIPPYDIR) so it can include static_pkgs.h.
+$(SHIM_OBJ): $(LIB_SHIM_SRC) $(ZIPPYDIR)/static_pkgs.h $(DEP_STAMPS)
+	mkdir -p $(@D)
+	$(KITSH_LD) $(KITSH_CFLAGS) -I$(ZIPPYDIR) $(KITSH_DEP_FLAGS) -c -o $@ \
+	    $(KITSH_KITSH_LANG) $(LIB_SHIM_SRC) $(KITSH_KITSH_LANG_END)
+
+# lib$(LIB_NAME).a = shim + scripts.o + every static Tcl/dep archive, merged into
+# one archive with ar -M so GNU ld re-scans it without --start-group.
+lib: $(LIBOUT)
+$(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(DEP_STAMPS)
+	@[ -n "$(strip $(LIB_SHIM_SRC))" ] || \
+	    { echo "the 'lib' target needs LIB_SHIM_SRC set to the project's shim .c" >&2; exit 1; }
+	rm -f $@
+	{ echo 'create $@'; \
+	  echo 'addmod $(SHIM_OBJ)'; \
+	  echo 'addmod $(SCRIPTS_OBJ)'; \
+	  $(foreach a,$(KITSH_TCL_LIBS),echo 'addlib $(a)';) \
+	  echo 'save'; echo 'end'; } | $(KIT_AR) -M
 
 # ==== Test ====
 # Smoke test that builds standalone tclsh/wish across DEPS combinations and

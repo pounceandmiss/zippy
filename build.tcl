@@ -232,7 +232,15 @@ if {$entryScript ne "" && $entryScript ne "main.tcl"} {
 }
 
 # ==== 5. Build the zipfs image ====
-zipfs mkimg $outFile $tmpDir $tmpDir "" $baseInterp
+if {$baseInterp eq ""} {
+    # No base interpreter: emit a bare zip (mkzip), NOT an image. `zipfs mkimg`
+    # with an empty infile prepends the running interpreter; the `lib` target
+    # needs the pure zip bytes to park in .rodata and mount via
+    # TclZipfs_MountBuffer, so use mkzip which never prepends an executable.
+    zipfs mkzip $outFile $tmpDir $tmpDir ""
+} else {
+    zipfs mkimg $outFile $tmpDir $tmpDir "" $baseInterp
+}
 
 # ==== 6. Clean up ====
 file delete -force $tmpDir

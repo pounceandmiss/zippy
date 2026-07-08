@@ -348,3 +348,24 @@ $(BASEDIR)/$(BIN_NAME)$(EXE_EXT): $(BASE_INTERP) $(DEP_STAMPS) $(BUILD_TCL) $(AP
 	$(HOST_TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ \
 		$(_SOURCES_CSV) $(ENTRY_SCRIPT) $(_EXCLUDES_CSV) $(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 endif
+
+# ==== Windows counterpart of `lib` ====
+# The shared static-library rules in zippy.mk build the shim, park the script zip
+# in .rodata and merge the archive; here we just retarget the binutils to the
+# MinGW cross tools and provide the bare-zip bundling step driven by a host tclsh
+# (the cross-built PE tclsh can't run on the build host). The shim compiles with
+# the same KITSH_* cross flags as the launcher. Output is $(BASEDIR)/lib<...>.a,
+# a static PE archive a MinGW-Qt app links exactly like the native .a.
+KIT_LD      := $(CROSS)-ld
+KIT_OBJCOPY := $(CROSS)-objcopy
+KIT_AR      := $(CROSS)-ar
+
+.PHONY: win-lib
+win-lib: lib
+
+$(SCRIPTS_ZIP): $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
+	mkdir -p $(@D)
+	ZIPPY_BUILDDIR=$(BUILDDIR) ZIPPY_EXE_EXT=$(EXE_EXT) ZIPPY_BASE_INTERP= \
+	$(HOST_TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ \
+		"$(_SOURCES_CSV)" "$(ENTRY_SCRIPT)" "$(_EXCLUDES_CSV)" \
+		$(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
