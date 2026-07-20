@@ -9,10 +9,10 @@ Downloads and compiles Tcl, Tk, and selected extensions from source, then packag
 - C compiler (gcc/clang)
 - C++ compiler (g++, required for `rtc`/`rtcma`)
 - make
-- cmake (required for `rtc`/`rtcma`)
+- cmake (required for `mtls`, `rtc`, `rtcma`, `omemo` — they all build mbedtls)
 - curl
 - zip (required for Tk build)
-- git (for `mtls`, `rtc`, `rtcma`)
+- git (for `mtls`, `rtc`, `rtcma`, `omemo`, `tclwuffs`, `tkwuffs`, `tkdnd`)
 
 ## Quick start
 
@@ -49,83 +49,25 @@ The output binary (`./myapp`) is placed at the project root.
 
 ## Configuration
 
-### `BIN_NAME`
-
-Set to produce an app binary. Omit `BIN_NAME` for a standalone
-interpreter.
-
-At runtime, app files are mounted at `//zipfs:/app/`.
-
-### `APP_DIR`
-
-Source directory for app files. Defaults to `.` (project root). Set this to a
-subdirectory if you prefer to keep app code separate:
-
-```makefile
-BIN_NAME := myapp
-APP_DIR  := src
-```
-
-A `main.tcl` must exist in `APP_DIR` (the
-project root by default). All files in `APP_DIR` are bundled into the zipfs
-image, except for built-in excludes (the zippy directory, `_build/`,
-`Makefile`, and the output binary itself).
-
-### `APP_EXCLUDE`
-
-Space-separated list of file/directory names to exclude from the
-bundle. Built-in excludes are always applied; this adds to them.
-
-```makefile
-APP_EXCLUDE := tests docs .git
-```
-
-### `SHELL_TYPE`
-
-- `wish` (default) — base interpreter includes Tk (GUI support)
-- `tclsh` — base interpreter without Tk
-
-### `DEPS`
-
-Optional, any combination of:
-
-- `tdom` — XML/HTML parsing
-- `tcllib` — standard Tcl library collection
-- `mtls` — TLS via mbedTLS
-- `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps. See `IMG_INCLUDE` below to compile in only a subset of format readers.
-- `rtc` — libdatachannel wrapper. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic. 
-- `rtcma` — libdatachannel-miniaudio adapter. Requires `rtc` to be in `DEPS` too.
-- `tkdnd` — native drag-and-drop for Tk (X11 XDND). Requires `SHELL_TYPE=wish`.
-
-### `TCLLIB_INCLUDE`
-
-Whitelist of tcllib submodules to bundle. Unset = ship all of tcllib.
-
-```makefile
-TCLLIB_INCLUDE := math base64 json
-```
-
-Transitive deps are not auto-resolved (list them yourself), and `package require tcllib` stops working in whitelist mode — require the specific submodules.
-
-### `IMG_INCLUDE`
-
-Whitelist of tkimg format readers to compile into the kitsh binary. Unset = ship every format.
-
-```makefile
-IMG_INCLUDE := png jpeg bmp
-```
-
-Valid names: `bmp`, `dted`, `flir`, `gif`, `ico`, `jpeg`, `pcx`, `pixmap`, `png`, `ppm`, `ps`, `raw`, `sgi`, `sun`, `tga`, `tiff`, `window`, `xbm`, `xpm`.
-
-Required base libs (`zlibtcl` / `pngtcl` / `jpegtcl` / `tifftcl`) are derived from the format list, so e.g. selecting `png` automatically pulls in `zlibtcl`+`pngtcl` (and only those — `libjpeg`/`libtiff` are dropped from the link).
-
-The umbrella `package require Img` still works, but only requires the intersection of the whitelist with Img's default auto-detect subset. To pull in a format that isn't in that subset (`dted`/`flir`/`gif`/`raw`/`ps`), use `package require img::<name>` directly.
-
-The Img build itself still compiles every subdir — the whitelist only affects what gets linked and what the generated `pkgIndex.tcl` advertises. Because of that, **changing `IMG_INCLUDE` requires `make clean`** before rebuilding.
-
-### `STRIP`
-
-`STRIP=1` (default) strips debug symbols from the shipped binary and writes a `<binary>.debug` sidecar next to it. Set `STRIP=0` for an unstripped binary.
+- `BIN_NAME` — name of the app binary to produce. Omit for a standalone interpreter. App files are mounted at `//zipfs:/app/` at runtime.
+- `APP_DIR` — source directory for app files, default `.` (project root). Must contain `main.tcl`. Everything under it is bundled, minus the built-in excludes (the zippy directory, `_build/`, `Makefile`, the output binary).
+- `APP_EXCLUDE` — extra file/directory names to leave out of the bundle, e.g. `tests docs .git`. Adds to the built-in excludes.
+- `SHELL_TYPE` — `wish` (default, includes Tk) or `tclsh` (no Tk).
+- `DEPS` — extensions to bundle, any combination of:
+  - `tdom` — XML/HTML parsing
+  - `tcllib` — standard Tcl library collection
+  - `mtls` — TLS via mbedTLS
+  - `img` — Tk Img (PNG, JPEG, TIFF, BMP, GIF, ICO, TGA, and more). Requires `SHELL_TYPE=wish`. Bundles its own libpng/libjpeg/libtiff/zlib — no system deps.
+  - `rtc` — [libdatachannel-tcl](https://github.com/pounceandmiss/libdatachannel-tcl), a WebRTC binding. libdatachannel and mbedtls are brought in statically; libstdc++ is statically linked, libgcc_s remains dynamic.
+  - `rtcma` — [rtc-ma](https://github.com/pounceandmiss/rtc-ma), a libdatachannel-miniaudio adapter. Requires `rtc` in `DEPS` too.
+  - `omemo` — [picomemo-tcl](https://github.com/pounceandmiss/picomemo-tcl), OMEMO end-to-end encryption. Links mbedtls.
+  - `tclwuffs` — [tclwuffs](https://github.com/pounceandmiss/tclwuffs), memory-safe image decode/encode/resize on wuffs+stb.
+  - `tkwuffs` — Tk photo bridge for tclwuffs, from the same repo. Requires `SHELL_TYPE=wish` and `tclwuffs` in `DEPS`.
+  - `tkdnd` — native drag-and-drop for Tk (X11 XDND). Requires `SHELL_TYPE=wish`.
+- `TCLLIB_INCLUDE` — whitelist of tcllib submodules, e.g. `math base64 json`. Unset ships all of tcllib. Transitive deps are not auto-resolved (list them yourself), and `package require tcllib` stops working in whitelist mode — require the specific submodules.
+- `IMG_INCLUDE` — whitelist of tkimg format readers to compile in, e.g. `png jpeg bmp`. Unset ships every format. Changing it requires `make clean`.
+- `STRIP` — `1` (default) strips debug symbols from the shipped binary and writes a `<binary>.debug` sidecar next to it; `0` leaves it unstripped.
+- `WIN_ICON` — path to an `.ico` file for the exe's icon. Only applies to Windows targets.
 
 ## Targets
 
@@ -165,8 +107,6 @@ To run a smoke test that builds wish with all dependencies and exercises each:
 make -C zippy -f zippy.mk test
 ```
 
-See `tests/smoke.sh` for the assertions.
-
 ## Windows (cross-build)
 
 `TARGET_OS=windows` cross-compiles a static Windows `.exe` from Linux via
@@ -192,18 +132,6 @@ make -f zippy/zippy.mk TARGET_OS=windows BIN_NAME=myapp \
     SHELL_TYPE=wish DEPS="..." SOURCES="..." ENTRY_SCRIPT=main.tcl win-app
 ```
 
-The output is a self-contained `.exe`.
+All deps are supported on Windows.
 
-All deps are supported on Windows. The bundling step needs a host
-`tclsh9.0`.
-
-### `WIN_ICON`
-
-Path to an `.ico` file for the exe's icon. `windres` links it into the
-launcher, so it applies to `win-wish`, `win-tclsh`, and `win-app`:
-
-```
-make -f zippy.mk TARGET_OS=windows BIN_NAME=myapp WIN_ICON=$(pwd)/app.ico win-app
-```
-
-Must be an `.ico`.
+Set `WIN_ICON` to point to an `.ico` file to give the exe an icon.
