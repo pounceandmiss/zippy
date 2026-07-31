@@ -6,6 +6,9 @@ Downloads and compiles Tcl, Tk, and selected extensions from source, then packag
 
 ## Prerequisites
 
+Linux (native or cross), or macOS — see [macOS](#macos-native-build) for that
+host's specifics.
+
 - C compiler (gcc/clang)
 - C++ compiler (g++, required for `rtc`/`rtcma`)
 - make
@@ -63,7 +66,7 @@ The output binary (`./myapp`) is placed at the project root.
   - `omemo` — [picomemo-tcl](https://github.com/pounceandmiss/picomemo-tcl), OMEMO end-to-end encryption. Links mbedtls.
   - `tclwuffs` — [tclwuffs](https://github.com/pounceandmiss/tclwuffs), memory-safe image decode/encode/resize on wuffs+stb.
   - `tkwuffs` — Tk photo bridge for tclwuffs, from the same repo. Requires `SHELL_TYPE=wish` and `tclwuffs` in `DEPS`.
-  - `tkdnd` — native drag-and-drop for Tk (X11 XDND). Requires `SHELL_TYPE=wish`.
+  - `tkdnd` — native drag-and-drop for Tk (X11 XDND). Requires `SHELL_TYPE=wish`. Not available on macOS.
 - `TCLLIB_INCLUDE` — whitelist of tcllib submodules, e.g. `math base64 json`. Unset ships all of tcllib. Transitive deps are not auto-resolved (list them yourself), and `package require tcllib` stops working in whitelist mode — require the specific submodules.
 - `IMG_INCLUDE` — whitelist of tkimg format readers to compile in, e.g. `png jpeg bmp`. Unset ships every format. Changing it requires `make clean`.
 - `STRIP` — `1` (default) strips debug symbols from the shipped binary and writes a `<binary>.debug` sidecar next to it; `0` leaves it unstripped.
@@ -106,6 +109,32 @@ To run a smoke test that builds wish with all dependencies and exercises each:
 ```
 make -C zippy -f zippy.mk test
 ```
+
+## macOS (native build)
+
+`TARGET_OS` defaults to `macos` on a Darwin host, so the normal invocations work
+unchanged:
+
+```
+make -f zippy.mk SHELL_TYPE=wish DEPS="tdom mtls" wish   # -> ./wish
+```
+
+Tk builds against Aqua. Output goes to `_build/`.
+
+Extra prerequisites: the Xcode Command Line Tools (`xcode-select --install`)
+for clang, the SDK and `dsymutil`. `cmake` is not among them; install it
+separately for `mtls`/`rtc`/`rtcma`/`omemo`.
+
+macOS has no static libSystem, so libSystem, libz and the system frameworks stay
+dynamic; everything else is still bundled statically. `STRIP=1` writes
+`<binary>.debug` as a `.dSYM` bundle — a directory, not a flat file.
+
+All deps are supported except `tkdnd`, which only has its X11 XDND backend wired
+up here and fails the build.
+
+Cross-compiling to macOS from Linux is not supported. It needs an SDK extracted
+from Xcode, whose licence restricts use to Apple hardware, and the result cannot
+be run or smoke-tested.
 
 ## Windows (cross-build)
 

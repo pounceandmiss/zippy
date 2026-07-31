@@ -54,13 +54,29 @@
 ZIPPYDIR     := $(abspath $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST)))))
 BASEDIR      := $(CURDIR)
 
+# ==== Host tool portability ====
+# macOS has shasum rather than sha256sum (both take -c over "<hash>  <file>"),
+# and BSD sed's -i requires a backup-suffix argument where GNU sed's is optional.
+SHA256SUM        := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo shasum -a 256)
+SED_INPLACE_FLAG := $(shell sed --version >/dev/null 2>&1 && echo -i || echo "-i ''")
+
 # ==== Target platform ====
 # TARGET_OS selects the build target; default (unset/linux) is the native build.
 # The Windows variables below are empty when TARGET_OS != windows, so the native
 # build is unchanged. TARGET_OS=windows cross-compiles a static PE via MinGW-w64;
 # the divergent Tcl/Tk + TEA package recipes live in windows.mk (included at the
 # bottom). The Windows tree sits under _build-win, separate from a native _build.
-TARGET_OS    ?= linux
+#
+# The default follows the build host, so a plain `make` on a Mac targets macos.
+# macos is a *native* target, not a cross one: the built interp runs on the
+# build host, so CROSS_OVERLAY stays unset and the native bundling path applies.
+# Its toolchain differences (ld64 vs GNU ld, Tk on Aqua vs X11) are all
+# flag-level, so it needs no overlay file — the seams below absorb them.
+ifeq ($(shell uname -s),Darwin)
+  TARGET_OS  ?= macos
+else
+  TARGET_OS  ?= linux
+endif
 ifeq ($(TARGET_OS),windows)
   WIN          := 1
   CROSS_OVERLAY := 1
@@ -82,6 +98,17 @@ else ifeq ($(TARGET_OS),android)
   BUILDDIR     := $(BASEDIR)/_build-android
   STATIC_LIBSTDCXX := 0
   CMAKE_TOOLCHAIN := -DCMAKE_TOOLCHAIN_FILE=$(ZIPPYDIR)/android-toolchain.cmake
+else ifeq ($(TARGET_OS),macos)
+  # Shares _build with the Linux native build: only one of the two can be the
+  # host, so they never collide in one checkout.
+  MACOS        := 1
+  EXE_EXT      :=
+  BUILDDIR     := $(BASEDIR)/_build
+  # No cross toolchain, but the SDK ships Apple's Tcl 8.5 as a framework and
+  # cmake's find_path prefers frameworks over CMAKE_PREFIX_PATH on Darwin — left
+  # at the default, rtc resolves tcl.h to Tcl 8.5 and fails on Tcl_Size. LAST
+  # demotes frameworks; explicit -framework link flags are unaffected.
+  CMAKE_TOOLCHAIN := -DCMAKE_FIND_FRAMEWORK=LAST
 else
   WIN          :=
   EXE_EXT      :=
@@ -187,7 +214,7 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
 OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
-OMEMO_COMMIT := 7e5c820c713f1d0ea9864472026d618c8d590b8e
+OMEMO_COMMIT := 9523cb71d85510f61f342c84b1fc8176aff8797f
 OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl
 
 # Tclwuffs. Memory-safe image decode/encode/resize on wuffs+stb. Two tiers:
@@ -264,7 +291,7 @@ ifdef WIN
   WISH  := $(PREFIX)/.tk_win_installed
 endif
 
-NPROC := $(shell nproc 2>/dev/null || echo 4)
+NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # Size optimization: emit per-function/data sections in every dep so the kitsh
 # link can drop unreferenced ones with --gc-sections. Both halves are needed —
@@ -273,7 +300,12 @@ NPROC := $(shell nproc 2>/dev/null || echo 4)
 # the CFLAGS=/CMAKE_C_FLAGS= insertions in the recipes become no-ops.
 ifeq ($(GC_SECTIONS),1)
   SIZE_CFLAGS  := -ffunction-sections -fdata-sections
-  SIZE_LDFLAGS := -Wl,--gc-sections
+  # ld64 has no --gc-sections; -dead_strip is the Mach-O equivalent.
+  ifdef MACOS
+    SIZE_LDFLAGS := -Wl,-dead_strip
+  else
+    SIZE_LDFLAGS := -Wl,--gc-sections
+  endif
 else
   SIZE_CFLAGS  :=
   SIZE_LDFLAGS :=
@@ -288,13 +320,16 @@ RTCMA_CMAKE_FLAGS := $(SIZE_CFLAGS)
 # cmake --build target selection. Native builds the default (all), including
 # the shared rtc.dll/rtcma module. Those don't link under mingw (usrsctp's
 # GetAdaptersAddresses needs -liphlpapi, which isn't wired for the .dll) and
-# aren't needed; the static kitsh link uses only the *_static archives. So
-# Windows builds just those targets.
+# aren't needed; the static kitsh link uses only the *_static archives. macOS
+# skips them for a different reason: rtc-ma's test programs call
+# clock_nanosleep(), which Darwin lacks. Both build just the static targets.
 RTC_BUILD_TARGETS   :=
 RTCMA_BUILD_TARGETS :=
 ifdef WIN
   RTC_CMAKE_FLAGS     := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
   RTCMA_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC -DOPUS_BUILD
+endif
+ifneq (,$(WIN)$(MACOS))
   RTC_BUILD_TARGETS   := --target rtc_tcl_static
   RTCMA_BUILD_TARGETS := --target rtcma rtcma_tcl_static
 endif
@@ -404,6 +439,11 @@ endif
 ifneq (,$(filter tkdnd,$(DEPS)))
   ifeq ($(SHELL_TYPE),tclsh)
     $(error tkdnd requires Tk; cannot be used with SHELL_TYPE=tclsh)
+  endif
+  # Only the X11 XDND backend is wired up here; tkdnd's separate Objective-C
+  # macOS backend is not, so there is nothing to build against Aqua.
+  ifdef MACOS
+    $(error tkdnd is X11-only in this build; not supported on TARGET_OS=macos)
   endif
   DEP_STAMPS += $(PREFIX)/.tkdnd_installed
   # Bundle the lib dir (tkdnd.tcl + platform scripts + pkgIndex.tcl). build.tcl
@@ -559,14 +599,40 @@ KITSH_TK_LIBS  = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
     $(PREFIX)/lib/libtkstub.a $(PREFIX)/lib/libtclstub.a
 KITSH_CFLAGS      := -I$(PREFIX)/include
 KITSH_SYSLIBS     := -lpthread -ldl -lz -lm
-# Tk 9 statically pulls in X11, Xft/fontconfig and Xss (XScreenSaver).
-# CUPS is dropped via --disable-libcups in the Tk configure step.
-KITSH_TK_SYSLIBS  := -lX11 -lXss -lXext -lXft -lfontconfig
+ifdef MACOS
+  # CoreFoundation is not Tk-only: Tcl's own notifier (CFRunLoop) and bundle
+  # loader need it, so tclsh links it too. Matches TCL_LIBS in tclConfig.sh.
+  KITSH_SYSLIBS += -framework CoreFoundation
+  # ld64 re-scans archives to a fixed point and rejects --start-group outright.
+  LINK_GROUP_START :=
+  LINK_GROUP_END   :=
+  # Mirrors TK_LIBS in the generated tkConfig.sh, minus what KITSH_SYSLIBS
+  # already carries. UniformTypeIdentifiers must stay weak: it only exists on
+  # macOS 11+, and a hard link stops the binary launching on older systems.
+  KITSH_TK_SYSLIBS := -framework Cocoa -framework Carbon -framework IOKit \
+      -framework QuartzCore -framework Security -framework CoreGraphics \
+      -weak_framework UniformTypeIdentifiers
+else
+  # GNU ld needs an explicit group for the mutual references between the Tcl/Tk
+  # archives and the dep archives.
+  LINK_GROUP_START := -Wl,--start-group
+  LINK_GROUP_END   := -Wl,--end-group
+  # Tk 9 statically pulls in X11, Xft/fontconfig and Xss (XScreenSaver).
+  # CUPS is dropped via --disable-libcups in the Tk configure step.
+  KITSH_TK_SYSLIBS := -lX11 -lXss -lXext -lXft -lfontconfig
+endif
 # tkdnd's Cursors.c links libXcursor (configure pulls it in when X11/Xcursor/
 # Xcursor.h is present). Goes here rather than KITSH_EXTRA_LDFLAGS, which the
 # rtc block overwrites with :=; wish-only, since tkdnd is.
 ifneq (,$(filter tkdnd,$(DEPS)))
   KITSH_TK_SYSLIBS += -lXcursor
+endif
+# The mbedtls-based deps read the system trust store through the keychain
+# (SecTrustSettingsCopyCertificates), which lives in the Security framework.
+ifdef MACOS
+ifneq (,$(filter mtls rtc rtcma omemo,$(DEPS)))
+  KITSH_SYSLIBS += -framework Security
+endif
 endif
 
 KITSH_TCLSH := $(BUILDDIR)/kitsh_tclsh$(EXE_EXT)
@@ -644,22 +710,22 @@ endif
 $(DEPSDIR)/$(TCL_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ $(TCL_URL)
-	echo "$(TCL_SHA256)  $@" | sha256sum -c
+	echo "$(TCL_SHA256)  $@" | $(SHA256SUM) -c
 
 $(DEPSDIR)/$(TK_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ $(TK_URL)
-	echo "$(TK_SHA256)  $@" | sha256sum -c
+	echo "$(TK_SHA256)  $@" | $(SHA256SUM) -c
 
 $(DEPSDIR)/$(TDOM_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ $(TDOM_URL)
-	echo "$(TDOM_SHA256)  $@" | sha256sum -c
+	echo "$(TDOM_SHA256)  $@" | $(SHA256SUM) -c
 
 $(DEPSDIR)/$(TCLLIB_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ $(TCLLIB_URL)
-	echo "$(TCLLIB_SHA256)  $@" | sha256sum -c
+	echo "$(TCLLIB_SHA256)  $@" | $(SHA256SUM) -c
 
 $(MTLS_SRC):
 	git clone $(MTLS_REPO) $(MTLS_SRC)
@@ -700,12 +766,12 @@ $(TKDND_SRC):
 $(DEPSDIR)/$(IMG_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ "$(IMG_URL)"
-	echo "$(IMG_SHA256)  $@" | sha256sum -c
+	echo "$(IMG_SHA256)  $@" | $(SHA256SUM) -c
 
 $(DEPSDIR)/$(OPUS_TAR):
 	mkdir -p $(DEPSDIR)
 	curl -L -o $@ $(OPUS_URL)
-	echo "$(OPUS_SHA256)  $@" | sha256sum -c
+	echo "$(OPUS_SHA256)  $@" | $(SHA256SUM) -c
 
 download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(LIBDC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(OPUS_TAR) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
 
@@ -767,6 +833,15 @@ $(OPUS_SRC): $(DEPSDIR)/$(OPUS_TAR) $(OPUS_PATCHES)
 	touch $@
 
 # ==== Build Tcl/Tk ====
+# Tk's windowing backend. Aqua builds from the same unix/ tree; without
+# --enable-aqua Tk configures for X11 and the result needs XQuartz installed,
+# which defeats the point. --disable-libcups only applies to the X11 print path.
+ifdef MACOS
+  TK_CONFIGURE_EXTRA := --enable-aqua
+else
+  TK_CONFIGURE_EXTRA := --disable-libcups
+endif
+
 # Native builds in unix/; the Windows cross-build (win/) lives in windows.mk,
 # so these native recipes are guarded out when WIN is set.
 ifndef CROSS_OVERLAY
@@ -774,7 +849,7 @@ $(TCLSH): $(TCL_SRC)
 	cd $(TCL_SRC)/unix && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --prefix=$(PREFIX) --enable-zipfs --disable-shared --with-system-libtommath=no && \
-		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
+		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install && \
 		$(MAKE) install-libraries && \
@@ -783,8 +858,8 @@ $(TCLSH): $(TCL_SRC)
 $(WISH): $(TK_SRC) $(TCLSH)
 	cd $(TK_SRC)/unix && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
-		./configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --enable-zipfs --disable-shared --disable-libcups && \
-		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
+		./configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --enable-zipfs --disable-shared $(TK_CONFIGURE_EXTRA) && \
+		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install && \
 		$(MAKE) install-libraries
@@ -975,7 +1050,7 @@ $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 	cp $(TKDND_SRC)/build/libtcl9tkdnd$(TKDND_VER).a $(PREFIX)/lib/tkdnd$(TKDND_VER)/
 	cp $(TKDND_SRC)/library/*.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
 	cp $(TKDND_SRC)/build/pkgIndex.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
-	sed -i 's|load $$dir/$$PKG_LIB_FILE|load {}|' $(PREFIX)/lib/tkdnd$(TKDND_VER)/tkdnd.tcl
+	sed $(SED_INPLACE_FLAG) 's|load $$dir/$$PKG_LIB_FILE|load {}|' $(PREFIX)/lib/tkdnd$(TKDND_VER)/tkdnd.tcl
 	touch $@
 endif
 
@@ -987,15 +1062,24 @@ endif
 # central directory. The sidecar is later copied next to the shipped binary.
 OBJCOPY  ?= objcopy
 STRIP_BIN ?= strip
+ifdef MACOS
+# No objcopy in the Xcode tools, and Mach-O keeps debug info in the object files
+# rather than the linked image, so dsymutil collects it into a .dSYM *bundle* —
+# a directory, hence the cp -R in maybe_copy_debug.
+define maybe_strip_kitsh
+$(if $(filter 1,$(STRIP)),dsymutil $(1) -o $(1).debug && $(STRIP_BIN) -S $(1),true)
+endef
+else
 define maybe_strip_kitsh
 $(if $(filter 1,$(STRIP)),$(OBJCOPY) --only-keep-debug $(1) $(1).debug && $(STRIP_BIN) -s $(1),true)
 endef
+endif
 
 $(KITSH_TCLSH): $(ZIPPYDIR)/kitsh.c $(TCLSH) $(DEP_STAMPS)
 	mkdir -p $(@D)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		$(KITSH_EXTRA_OBJS) \
-		-Wl,--start-group $(KITSH_TCL_LIBS) -Wl,--end-group \
+		$(LINK_GROUP_START) $(KITSH_TCL_LIBS) $(LINK_GROUP_END) \
 		$(KITSH_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)
 
@@ -1003,7 +1087,7 @@ $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
 	mkdir -p $(@D)
 	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) -DWITH_TK $(KITSH_DEP_FLAGS) -o $@ $(KITSH_KITSH_LANG) $< $(KITSH_KITSH_LANG_END) \
 		$(KITSH_EXTRA_OBJS) \
-		-Wl,--start-group $(KITSH_TK_LIBS) -Wl,--end-group \
+		$(LINK_GROUP_START) $(KITSH_TK_LIBS) $(LINK_GROUP_END) \
 		$(KITSH_SYSLIBS) $(KITSH_TK_SYSLIBS) $(KITSH_EXTRA_LDFLAGS) $(SIZE_LDFLAGS)
 	$(call maybe_strip_kitsh,$@)
 
@@ -1012,7 +1096,7 @@ $(KITSH_WISH): $(ZIPPYDIR)/kitsh.c $(WISH) $(DEP_STAMPS)
 # Place the kitsh launcher's .debug sidecar next to the shipped binary so a
 # crash address can be resolved with `addr2line -e <binary>.debug 0x...`.
 define maybe_copy_debug
-$(if $(filter 1,$(STRIP)),cp $(1).debug $(2).debug,true)
+$(if $(filter 1,$(STRIP)),cp -R $(1).debug $(2).debug,true)
 endef
 
 # Native bundling runs $(TCLSH); a cross target can't (its interp is foreign), so

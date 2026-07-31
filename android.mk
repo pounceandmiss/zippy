@@ -42,7 +42,7 @@ $(TCLSH): $(TCL_SRC)
 		$(ANDROID_TC) CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --enable-zipfs --disable-shared --with-system-libtommath=no && \
-		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
+		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
 		$(MAKE) install TCL_EXE=$(HOST_TCLSH) TCLSH_PROG=$(HOST_TCLSH) && \
 		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH) TCLSH_PROG=$(HOST_TCLSH) && \

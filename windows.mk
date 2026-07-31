@@ -42,7 +42,7 @@ $(TCLSH): $(TCL_SRC)
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --enable-zipfs --disable-shared \
 			--with-system-libtommath=no && \
-		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
+		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install TCL_EXE=$(HOST_TCLSH) && \
 		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH)
@@ -54,7 +54,7 @@ $(WISH): $(TK_SRC) $(TCLSH)
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib \
 			--enable-zipfs --disable-shared && \
-		sed -i 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
+		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install TCL_EXE=$(HOST_TCLSH) && \
 		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH)
@@ -225,7 +225,7 @@ $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 	cp $(BUILDDIR)/tkdnd/libtcl9tkdnd$(TKDND_FLAT).a $(PREFIX)/lib/tkdnd$(TKDND_VER)/
 	cp $(TKDND_SRC)/library/*.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
 	cp $(BUILDDIR)/tkdnd/pkgIndex.tcl $(PREFIX)/lib/tkdnd$(TKDND_VER)/
-	sed -i 's|load $$dir/$$PKG_LIB_FILE|load {}|' $(PREFIX)/lib/tkdnd$(TKDND_VER)/tkdnd.tcl
+	sed $(SED_INPLACE_FLAG) 's|load $$dir/$$PKG_LIB_FILE|load {}|' $(PREFIX)/lib/tkdnd$(TKDND_VER)/tkdnd.tcl
 	touch $@
 
 # ==== kitsh link overrides ====
