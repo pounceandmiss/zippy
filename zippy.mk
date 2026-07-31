@@ -144,6 +144,11 @@ ifneq ($(origin APP_DIR),undefined)
 endif
 
 # ==== Versions ====
+# Every dep's checkout path carries its version or pin, so bumping one names a
+# path that doesn't exist yet and make refetches. The *_COMMIT pins need this:
+# the git rules clone-then-checkout, and make would otherwise see an existing
+# directory, skip the recipe and silently keep the old commit. Old checkouts
+# stay behind until `make distclean`.
 TCL_VER    := 9.0.3
 TK_VER     := 9.0.3
 TCLLIB_VER := 2.0
@@ -177,7 +182,7 @@ IMG_TIFF_VER  := 4.7.1
 MBEDTLS_VER       := 3.6.6
 MBEDTLS_REPO      := https://github.com/Mbed-TLS/mbedtls.git
 MBEDTLS_COMMIT    := 5b64a9fdb979c8971561ec78221b528e3cc4e00a
-MBEDTLS_SRC       := $(DEPSDIR)/mbedtls
+MBEDTLS_SRC       := $(DEPSDIR)/mbedtls-$(MBEDTLS_COMMIT)
 MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
 
 # Rtc (libdatachannel-tcl). C++ Tcl 9 binding for libdatachannel. Built via
@@ -187,12 +192,12 @@ MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
 RTC_VER    := 0.1.0
 RTC_REPO   := https://github.com/pounceandmiss/libdatachannel-tcl.git
 RTC_COMMIT := 9ae99076fd98df9157637b54d98fbe9bfb4b7ce0
-RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl
+RTC_SRC    := $(DEPSDIR)/libdatachannel-tcl-$(RTC_COMMIT)
 
 # libdatachannel: rtc's WebRTC core, pre-staged so its cmake builds offline.
 LIBDC_REPO   := https://github.com/paullouisageneau/libdatachannel.git
 LIBDC_COMMIT := c47f5d77c124c35c31ac8378ad613295a124d354
-LIBDC_SRC    := $(DEPSDIR)/libdatachannel
+LIBDC_SRC    := $(DEPSDIR)/libdatachannel-$(LIBDC_COMMIT)
 
 # Rtcma (rtc-ma). Audio-over-libdatachannel adapter (miniaudio + opus +
 # jitter buffer + SDP) with its own Tcl 9 binding. Built via cmake with
@@ -202,7 +207,7 @@ LIBDC_SRC    := $(DEPSDIR)/libdatachannel
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
 RTCMA_COMMIT := 2e01ac19658782f2f0e33a07250e2215154130f7
-RTCMA_SRC    := $(DEPSDIR)/rtc-ma
+RTCMA_SRC    := $(DEPSDIR)/rtc-ma-$(RTCMA_COMMIT)
 
 # opus: rtc-ma's audio codec, pre-staged tarball so its cmake builds offline.
 OPUS_VER    := 1.6.1
@@ -215,7 +220,7 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 OMEMO_VER    := 0.3.0
 OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
 OMEMO_COMMIT := 9523cb71d85510f61f342c84b1fc8176aff8797f
-OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl
+OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl-$(OMEMO_COMMIT)
 
 # Tclwuffs. Memory-safe image decode/encode/resize on wuffs+stb. Two tiers:
 # `tclwuffs` (no-Tk) and `tkwuffs` (Tk photo bridge); the shared wuffs/stb
@@ -223,7 +228,7 @@ OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl
 TCLWUFFS_VER    := 0.1.0
 TCLWUFFS_REPO   := https://github.com/pounceandmiss/tclwuffs.git
 TCLWUFFS_COMMIT := c1d3eee88d6dec9161555e6df7e9cc3ea2348542
-TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs
+TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs-$(TCLWUFFS_COMMIT)
 
 # Tkdnd. Native drag-and-drop for Tk (X11 XDND). TEA build that also ships Tcl
 # support scripts (tkdnd.tcl + per-platform files) beside the static archive.
@@ -232,7 +237,7 @@ TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs
 TKDND_VER    := 2.9.5
 TKDND_REPO   := https://github.com/petasis/tkdnd.git
 TKDND_COMMIT := 6efca37a22b93b2336dc973f2b4a9ba1e3feceaf
-TKDND_SRC    := $(DEPSDIR)/tkdnd
+TKDND_SRC    := $(DEPSDIR)/tkdnd-$(TKDND_COMMIT)
 
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
 # of the package name (dir is sqlite3.51.0 for version 3.51.0).
@@ -251,7 +256,7 @@ TK_URL     := http://prdownloads.sourceforge.net/tcl/$(TK_TAR)
 TDOM_URL   := https://tdom.org/downloads/latest-src.tar.gz
 TCLLIB_URL := https://core.tcl-lang.org/tcllib/uv/$(TCLLIB_TAR)
 MTLS_REPO  := https://github.com/pounceandmiss/tclmtls.git
-MTLS_SRC   := $(DEPSDIR)/tclmtls
+MTLS_SRC   := $(DEPSDIR)/tclmtls-$(MTLS_COMMIT)
 IMG_URL    := https://sourceforge.net/projects/tkimg/files/tkimg/2.1/tkimg%202.1.1/$(IMG_TAR)/download
 
 # ==== Checksums ====
@@ -1218,7 +1223,11 @@ endif
 	rm -f $(BASEDIR)/wish$(EXE_EXT) $(BASEDIR)/wish$(EXE_EXT).debug \
 	      $(BASEDIR)/tclsh$(EXE_EXT) $(BASEDIR)/tclsh$(EXE_EXT).debug
 
+# clean only removes $(BUILDDIR), which for a cross target leaves the shared
+# $(DEPSDIR) behind. distclean drops the fetched sources too — including the
+# older checkouts left by a *_COMMIT bump, since those are keyed by pin.
 distclean: clean
+	rm -rf $(DEPSDIR)
 
 # ==== Windows cross-build ====
 # Tcl/Tk (win/) + thread/sqlite3 TEA recipes and the kitsh link-var overrides.
