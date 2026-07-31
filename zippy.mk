@@ -710,6 +710,24 @@ endif
 
 .PHONY: app wish tclsh download test clean distclean
 
+# ==== Source patches ====
+# Patches in $(PATCHES_DIR)/<tree>/*.patch apply to that tree (tcl, tk, tcllib,
+# tdom, img, opus) with `patch -p1` in lexical order after extraction. They're
+# prerequisites of the extract rule, so a changed patch forces a clean
+# re-extract (rm -rf): patching over an existing tree leaves stale .o files
+# whose struct layouts no longer match the patched headers.
+patches-for    = $(sort $(wildcard $(PATCHES_DIR)/$(1)/*.patch))
+# $(call apply-patches,<tree-dir>,<patch-list>)
+apply-patches  = $(foreach p,$(2),patch -d $(1) -p1 < $(p) &&) true
+
+TCL_PATCHES    := $(call patches-for,tcl)
+TK_PATCHES     := $(call patches-for,tk)
+TCLLIB_PATCHES := $(call patches-for,tcllib)
+TDOM_PATCHES   := $(call patches-for,tdom)
+IMG_PATCHES    := $(call patches-for,img)
+OPUS_PATCHES   := $(call patches-for,opus)
+MBEDTLS_PATCHES := $(call patches-for,mbedtls)
+
 # ==== Download ====
 
 $(DEPSDIR)/$(TCL_TAR):
@@ -732,41 +750,21 @@ $(DEPSDIR)/$(TCLLIB_TAR):
 	curl -L -o $@ $(TCLLIB_URL)
 	echo "$(TCLLIB_SHA256)  $@" | $(SHA256SUM) -c
 
-$(MTLS_SRC):
-	git clone $(MTLS_REPO) $(MTLS_SRC)
-	cd $(MTLS_SRC) && git checkout $(MTLS_COMMIT) && git submodule update --init --recursive
+# Clone rule per pinned git dep: reads <PREFIX>_SRC/_REPO/_COMMIT, plus
+# _PATCHES if that tree has any. The checkout path carries the pin (see
+# "Versions"), so a bump names a new target and refetches rather than reusing
+# the old tree. rm -rf clears a half-finished clone left by an interrupted run,
+# which git clone would otherwise refuse to write into.
+define git-dep
+$$($(1)_SRC): $$($(1)_PATCHES)
+	rm -rf $$@
+	git clone $$($(1)_REPO) $$@
+	cd $$@ && git checkout $$($(1)_COMMIT) && git submodule update --init --recursive
+	$$(call apply-patches,$$@,$$($(1)_PATCHES))
+endef
 
-# Patches (if any) force a clean re-clone, mirroring the tarball extract rules:
-# patching over an existing checkout leaves stale .o files behind.
-$(MBEDTLS_SRC): $(MBEDTLS_PATCHES)
-	rm -rf $@
-	git clone $(MBEDTLS_REPO) $(MBEDTLS_SRC)
-	cd $(MBEDTLS_SRC) && git checkout $(MBEDTLS_COMMIT) && git submodule update --init --recursive
-	$(call apply-patches,$(MBEDTLS_SRC),$(MBEDTLS_PATCHES))
-
-$(RTC_SRC):
-	git clone $(RTC_REPO) $(RTC_SRC)
-	cd $(RTC_SRC) && git checkout $(RTC_COMMIT) && git submodule update --init --recursive
-
-$(LIBDC_SRC):
-	git clone $(LIBDC_REPO) $(LIBDC_SRC)
-	cd $(LIBDC_SRC) && git checkout $(LIBDC_COMMIT) && git submodule update --init --recursive
-
-$(RTCMA_SRC):
-	git clone $(RTCMA_REPO) $(RTCMA_SRC)
-	cd $(RTCMA_SRC) && git checkout $(RTCMA_COMMIT) && git submodule update --init --recursive
-
-$(OMEMO_SRC):
-	git clone $(OMEMO_REPO) $(OMEMO_SRC)
-	cd $(OMEMO_SRC) && git checkout $(OMEMO_COMMIT) && git submodule update --init --recursive
-
-$(TCLWUFFS_SRC):
-	git clone $(TCLWUFFS_REPO) $(TCLWUFFS_SRC)
-	cd $(TCLWUFFS_SRC) && git checkout $(TCLWUFFS_COMMIT) && git submodule update --init --recursive
-
-$(TKDND_SRC):
-	git clone $(TKDND_REPO) $(TKDND_SRC)
-	cd $(TKDND_SRC) && git checkout $(TKDND_COMMIT) && git submodule update --init --recursive
+GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA OMEMO TCLWUFFS TKDND
+$(foreach d,$(GIT_DEPS),$(eval $(call git-dep,$(d))))
 
 $(DEPSDIR)/$(IMG_TAR):
 	mkdir -p $(DEPSDIR)
@@ -779,24 +777,6 @@ $(DEPSDIR)/$(OPUS_TAR):
 	echo "$(OPUS_SHA256)  $@" | $(SHA256SUM) -c
 
 download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(LIBDC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(OPUS_TAR) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
-
-# ==== Source patches ====
-# Patches in $(PATCHES_DIR)/<tree>/*.patch apply to that tree (tcl, tk, tcllib,
-# tdom, img, opus) with `patch -p1` in lexical order after extraction. They're
-# prerequisites of the extract rule, so a changed patch forces a clean
-# re-extract (rm -rf): patching over an existing tree leaves stale .o files
-# whose struct layouts no longer match the patched headers.
-patches-for    = $(sort $(wildcard $(PATCHES_DIR)/$(1)/*.patch))
-# $(call apply-patches,<tree-dir>,<patch-list>)
-apply-patches  = $(foreach p,$(2),patch -d $(1) -p1 < $(p) &&) true
-
-TCL_PATCHES    := $(call patches-for,tcl)
-TK_PATCHES     := $(call patches-for,tk)
-TCLLIB_PATCHES := $(call patches-for,tcllib)
-TDOM_PATCHES   := $(call patches-for,tdom)
-IMG_PATCHES    := $(call patches-for,img)
-OPUS_PATCHES   := $(call patches-for,opus)
-MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 
 # ==== Extract ====
 # Clean-extract (rm -rf) then apply patches; see "Source patches".
