@@ -1149,12 +1149,20 @@ LIBOUT       := $(BASEDIR)/lib$(LIB_NAME).a
 scripts-zip: $(SCRIPTS_ZIP)
 
 # Bare zipfs image of the SOURCES tree (ZIPPY_BASE_INTERP= => no prepended exe).
-# A cross overlay can't run its foreign target interp, so it replaces this recipe
-# with one driven by a host tclsh (windows.mk); native runs $(TCLSH) directly.
+# A cross overlay can't run its foreign target interp, so the cross branch drives
+# build.tcl with the overlay's HOST_TCLSH instead (shared by windows.mk and
+# android.mk); native runs $(TCLSH) directly.
 ifndef CROSS_OVERLAY
 $(SCRIPTS_ZIP): $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
 	mkdir -p $(@D)
 	ZIPPY_BASE_INTERP= $(bundle_app)
+else
+$(SCRIPTS_ZIP): $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
+	mkdir -p $(@D)
+	ZIPPY_BUILDDIR=$(BUILDDIR) ZIPPY_EXE_EXT=$(EXE_EXT) ZIPPY_BASE_INTERP= \
+	$(HOST_TCLSH) $(BUILD_TCL) $(SHELL_TYPE) $(BASEDIR) $@ \
+		"$(_SOURCES_CSV)" "$(ENTRY_SCRIPT)" "$(_EXCLUDES_CSV)" \
+		$(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 endif
 
 # Park the zip in .rodata (demand-paged, read-only). `ld -b binary` names its

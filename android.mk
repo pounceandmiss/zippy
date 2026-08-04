@@ -29,14 +29,17 @@ ANDROID_TC     := CC=$(ANDROID_CC) CXX=$(ANDROID_CXX) AR=$(ANDROID_AR) RANLIB=$(
 OBJCOPY   := llvm-objcopy
 STRIP_BIN := llvm-strip
 
-# Native tcl9.0 for the bundling step (HOST_TCLSH) and the cross install steps
-# that run a native interp (install-tzdata, bundled-pkg zipfs). Shipped in the
-# ndk image as tclsh9.0.
-HOST_TCLSH ?= tclsh$(TCL_BVER)
+# Native tcl9.0 (from the ndk image, /usr/local/bin) for the bundling step and
+# the zip steps in the TEA pkg sub-makes. Has to stay absolute: the sub-makes
+# (pkgs8/thread etc.) prepend TCL_BIN_DIR to PATH, where a bare tclsh9.0 would
+# resolve to the cross-built aarch64 binary.
+HOST_TCLSH ?= /usr/local/bin/tclsh$(TCL_BVER)
 
 # ==== Tcl (unix/ cross-build) ====
-# Same as the native recipe plus --host and the NDK toolchain; install steps run
-# the native interp (TCL_EXE), so the host never executes the aarch64 tclsh.
+# Same as the native recipe plus --host and the NDK toolchain. TCLSH_PROG rides
+# MAKEFLAGS into the TEA pkg sub-makes, whose zipfs steps execute it; the core
+# install steps that need a host interp use configure-detected NATIVE_TCLSH.
+# Don't pass TCL_EXE here: that's the output path of the tclsh link target.
 $(TCLSH): $(TCL_SRC)
 	cd $(TCL_SRC)/unix && \
 		$(ANDROID_TC) CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
@@ -44,8 +47,8 @@ $(TCLSH): $(TCL_SRC)
 			--prefix=$(PREFIX) --enable-zipfs --disable-shared --with-system-libtommath=no && \
 		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
-		$(MAKE) install TCL_EXE=$(HOST_TCLSH) TCLSH_PROG=$(HOST_TCLSH) && \
-		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH) TCLSH_PROG=$(HOST_TCLSH) && \
+		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH) && \
+		$(MAKE) install-libraries TCLSH_PROG=$(HOST_TCLSH) && \
 		cp $(TCL_SRC)/pkgs/thread$(THREAD_VER)/lib/ttrace.tcl $(PREFIX)/lib/thread$(THREAD_VER)/
 
 # ==== TEA deps ====
@@ -164,3 +167,18 @@ android-jnilibs: $(BASEDIR)/$(BIN_NAME)
 	cp $(BASEDIR)/$(BIN_NAME) $(ANDROID_JNILIBS_DIR)/$(ANDROID_LIB_NAME)
 	$(if $(ANDROID_RUNTIME_LIBS),cp $(ANDROID_RUNTIME_LIBS) $(ANDROID_JNILIBS_DIR)/,)
 endif
+
+# ==== Android counterpart of `lib` ====
+# The shared static-library rules in zippy.mk build the shim, park the script zip
+# in .rodata and merge the archive, with the cross scripts.zip recipe bundling via
+# HOST_TCLSH - same deal as win-lib. Here just the binutils retarget: the NDK
+# ships no GNU ld/ar, so the blob wraps via ld.lld (needs -m, raw-binary input
+# has no target to infer) and the MRI merge runs under llvm-ar.
+# Output is $(BASEDIR)/lib<...>.a, a bionic arm64 archive an Android-Qt app links
+# like the native .a (plus libc++_shared.so at runtime, as with the daemon).
+KIT_LD      := ld.lld -m aarch64linux
+KIT_OBJCOPY := llvm-objcopy
+KIT_AR      := llvm-ar
+
+.PHONY: android-lib
+android-lib: lib
