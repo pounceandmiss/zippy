@@ -206,7 +206,7 @@ LIBDC_SRC    := $(DEPSDIR)/libdatachannel-$(LIBDC_COMMIT)
 # DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 2e01ac19658782f2f0e33a07250e2215154130f7
+RTCMA_COMMIT := 07442896dce38ccc150c5b396bbd6b39cbcf3545
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma-$(RTCMA_COMMIT)
 
 # opus: rtc-ma's audio codec, pre-staged tarball so its cmake builds offline.
@@ -227,7 +227,7 @@ OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl-$(OMEMO_COMMIT)
 # glue lives only in libtclwuffs.a.
 TCLWUFFS_VER    := 0.1.0
 TCLWUFFS_REPO   := https://github.com/pounceandmiss/tclwuffs.git
-TCLWUFFS_COMMIT := c1d3eee88d6dec9161555e6df7e9cc3ea2348542
+TCLWUFFS_COMMIT := ddd4721499e2a2ad5f6ee0568c816591fbaf7e1b
 TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs-$(TCLWUFFS_COMMIT)
 
 # Tkdnd. Native drag-and-drop for Tk (X11 XDND). TEA build that also ships Tcl
