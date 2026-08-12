@@ -360,5 +360,10 @@ KIT_LD      := $(CROSS)-ld
 KIT_OBJCOPY := $(CROSS)-objcopy
 KIT_AR      := $(CROSS)-ar
 
+# Same as the kitsh link above: the merge names thread/sqlite/libz, and `lib`
+# doesn't build the launcher that would otherwise pull them in. Natively Tcl's
+# make install provides them, so only the win/ build needs this.
+$(LIBOUT): $(KITSH_BUNDLED_LIBS) $(WIN_LIBZ)
+
 .PHONY: win-lib
 win-lib: lib
