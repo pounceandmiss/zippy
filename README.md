@@ -234,3 +234,17 @@ zippy/in_docker.sh linux-glibc2.36 bash    # interactive toolchain shell
 Profiles map to `docker/<profile>.Dockerfile`: `linux-glibc2.36` (native Linux
 build against an old glibc, for portable binaries), `mingw` (Windows cross),
 `ndk` (Android).
+
+A tree belongs to one toolchain: objects a container built must not be reused by
+a host-native build of the same target. Two ways to get that:
+
+- **Cache mounts** (the default), for a project building into `./_build` — the
+  container's tree goes to `_build-docker/<profile>/`, the host keeps `_build/`.
+  Set `IN_DOCKER_BUILD_SUBDIR` if the tree isn't `_build`, space-separated (a
+  cross target has two: `_build` for dep sources, `_build-win` for objects).
+- **Separate `BASEDIR`s**, for a project already building per platform: give the
+  container its own flavour dir (`BASEDIR=/src/build/windows-docker`), set
+  `IN_DOCKER_BUILD_SUBDIR=` empty, name an `IN_DOCKER_CCACHE_DIR` in that tree.
+
+Mounting a subdir the project never builds into gets neither: empty cache,
+root-owned mountpoint in the project, unisolated build.
