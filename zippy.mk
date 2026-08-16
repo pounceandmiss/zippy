@@ -58,6 +58,9 @@ BASEDIR      := $(CURDIR)
 # macOS has shasum rather than sha256sum (both take -c over "<hash>  <file>"),
 # and BSD sed's -i requires a backup-suffix argument where GNU sed's is optional.
 SHA256SUM        := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo shasum -a 256)
+# Whole-tree copy (see git-dep). GNU cp shares extents on btrfs/xfs, making the
+# copy near-free; BSD/macOS cp pays a real one. --version detects GNU.
+CP_TREE          := $(shell cp --version >/dev/null 2>&1 && echo "cp -a --reflink=auto" || echo "cp -a")
 SED_INPLACE_FLAG := $(shell sed --version >/dev/null 2>&1 && echo -i || echo "-i ''")
 
 # ==== Target platform ====
@@ -122,7 +125,10 @@ PREFIX       := $(BUILDDIR)/local
 # across targets. Build outputs isolate by BUILDDIR; in-tree configures isolate
 # by subdir (Tcl/Tk build in unix/ vs win/; the native build never TEA-builds
 # the bundled pkgs the Windows build does).
-DEPSDIR      := $(BASEDIR)/_build/deps
+#
+# Overridable so targets with different BASEDIRs can share one cache, and so an
+# offline build can be handed a pre-seeded one.
+DEPSDIR      ?= $(BASEDIR)/_build/deps
 BUILD_TCL    := $(ZIPPYDIR)/build.tcl
 
 SHELL_TYPE   ?= wish
@@ -161,7 +167,7 @@ TK_BVER    := 9.0
 # so the Tcl 9 build detection works under dash (/bin/sh on Debian/Ubuntu/Termux,
 # i.e. the docker toolchains); without it mtls silently builds as Tcl 8 and SEGVs
 # in a Tcl 9 interp. Drop the fork once that fix lands upstream.
-MTLS_COMMIT := 0d4055a
+MTLS_COMMIT := 0d4055aa3f9bb5ef827e2ee76281102f54c7eca0
 
 THREAD_VER  := 3.0.4
 SQLITE3_VER := 3.51.0
@@ -314,6 +320,22 @@ ifeq ($(GC_SECTIONS),1)
 else
   SIZE_CFLAGS  :=
   SIZE_LDFLAGS :=
+endif
+
+# ==== Reproducible builds ====
+# Opt-in via SOURCE_DATE_EPOCH; unset leaves dev builds with real debug paths.
+# Zip entry mtimes are handled in build.tcl, which reads it from the environment.
+# DEPSDIR is mapped before BUILDDIR because it nests inside it by default and
+# gcc takes the first matching prefix.
+ifdef SOURCE_DATE_EPOCH
+  export SOURCE_DATE_EPOCH
+  REPRO_CFLAGS := -ffile-prefix-map=$(DEPSDIR)=/zippy/deps \
+                  -ffile-prefix-map=$(BUILDDIR)=/zippy/build \
+                  -ffile-prefix-map=$(ZIPPYDIR)=/zippy \
+                  -ffile-prefix-map=$(BASEDIR)=/zippy/src
+  # Folded into SIZE_CFLAGS: that string already reaches every dep recipe and
+  # the kitsh link. Needs gcc 8+ / clang 10+.
+  SIZE_CFLAGS += $(REPRO_CFLAGS)
 endif
 
 # Per-dep cmake C/C++ flag strings. Identical to SIZE_CFLAGS natively (so the
@@ -729,54 +751,138 @@ OPUS_PATCHES   := $(call patches-for,opus)
 MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 
 # ==== Download ====
+# The only phase that touches the network. Everything here is content-addressed
+# (sha256 per tarball, commit per git dep), so a populated DEPSDIR is all a
+# build needs — see ZIPPY_OFFLINE below.
 
-$(DEPSDIR)/$(TCL_TAR):
-	mkdir -p $(DEPSDIR)
-	curl -L -o $@ $(TCL_URL)
-	echo "$(TCL_SHA256)  $@" | $(SHA256SUM) -c
+TAR_DEPS := TCL TK TDOM TCLLIB IMG OPUS
+GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA OMEMO TCLWUFFS TKDND
 
-$(DEPSDIR)/$(TK_TAR):
-	mkdir -p $(DEPSDIR)
-	curl -L -o $@ $(TK_URL)
-	echo "$(TK_SHA256)  $@" | $(SHA256SUM) -c
+# Pristine per-pin checkout for each git dep, kept apart from the tree the build
+# uses. See git-dep below for why the two are separate.
+$(foreach d,$(GIT_DEPS),$(eval $(d)_GIT := $$(DEPSDIR)/git/$$(notdir $$($(d)_SRC))))
 
-$(DEPSDIR)/$(TDOM_TAR):
-	mkdir -p $(DEPSDIR)
-	curl -L -o $@ $(TDOM_URL)
-	echo "$(TDOM_SHA256)  $@" | $(SHA256SUM) -c
+DEPS_TARBALLS := $(foreach d,$(TAR_DEPS),$(DEPSDIR)/$($(d)_TAR))
+DEPS_GIT      := $(foreach d,$(GIT_DEPS),$($(d)_GIT))
 
-$(DEPSDIR)/$(TCLLIB_TAR):
-	mkdir -p $(DEPSDIR)
-	curl -L -o $@ $(TCLLIB_URL)
-	echo "$(TCLLIB_SHA256)  $@" | $(SHA256SUM) -c
+# ZIPPY_OFFLINE=1 replaces every network recipe with one that names the missing
+# dep and exits, instead of failing later as a curl/git error.
+# $(call offline-missing,<target>)
+define offline-missing
+echo "zippy: ZIPPY_OFFLINE=1, but this dep is not in DEPSDIR:" >&2; \
+	echo "    $(1)" >&2; \
+	echo "  DEPSDIR = $(DEPSDIR)" >&2; \
+	echo "  Seed it with 'make -f zippy.mk download' (needs network), or" >&2; \
+	echo "  unpack a bundle there ('make -f zippy.mk dep-bundle' builds one)." >&2; \
+	exit 1
+endef
 
-# Clone rule per pinned git dep: reads <PREFIX>_SRC/_REPO/_COMMIT, plus
-# _PATCHES if that tree has any. The checkout path carries the pin (see
-# "Versions"), so a bump names a new target and refetches rather than reusing
-# the old tree. rm -rf clears a half-finished clone left by an interrupted run,
-# which git clone would otherwise refuse to write into.
-define git-dep
-$$($(1)_SRC): $$($(1)_PATCHES)
+ifeq ($(ZIPPY_OFFLINE),1)
+
+define fetch-tar
+$$(DEPSDIR)/$$($(1)_TAR):
+	@$$(call offline-missing,$$@)
+endef
+
+define git-fetch
+$$($(1)_GIT):
+	@$$(call offline-missing,$$@)
+endef
+
+else
+
+define fetch-tar
+$$(DEPSDIR)/$$($(1)_TAR):
+	mkdir -p $$(DEPSDIR)
+	curl -L -o $$@ "$$($(1)_URL)"
+	echo "$$($(1)_SHA256)  $$@" | $$(SHA256SUM) -c
+endef
+
+# rm -rf clears a half-finished clone left by an interrupted run, which git
+# clone would otherwise refuse to write into.
+define git-fetch
+$$($(1)_GIT):
+	mkdir -p $$(dir $$@)
 	rm -rf $$@
 	git clone $$($(1)_REPO) $$@
 	cd $$@ && git checkout $$($(1)_COMMIT) && git submodule update --init --recursive
+endef
+
+endif
+
+# The tree the build compiles from: a copy of the pristine checkout with this
+# project's patches applied. Patching a copy rather than the checkout itself
+# keeps the fetched sources shareable (PATCHES_DIR is the consuming project's),
+# lets a changed patch re-apply without refetching, and means a pre-staged
+# checkout still gets patched instead of silently building unpatched.
+#
+# Costs a second copy on disk, or near-nothing where CP_TREE can share extents.
+define git-dep
+$$($(1)_SRC): $$($(1)_GIT) $$($(1)_PATCHES)
+	rm -rf $$@
+	$$(CP_TREE) $$< $$@
 	$$(call apply-patches,$$@,$$($(1)_PATCHES))
 endef
 
-GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA OMEMO TCLWUFFS TKDND
+$(foreach d,$(TAR_DEPS),$(eval $(call fetch-tar,$(d))))
+$(foreach d,$(GIT_DEPS),$(eval $(call git-fetch,$(d))))
 $(foreach d,$(GIT_DEPS),$(eval $(call git-dep,$(d))))
 
-$(DEPSDIR)/$(IMG_TAR):
-	mkdir -p $(DEPSDIR)
-	curl -L -o $@ "$(IMG_URL)"
-	echo "$(IMG_SHA256)  $@" | $(SHA256SUM) -c
+# The pristine sources only; the patched build trees are made locally by git-dep.
+download: $(DEPS_TARBALLS) $(DEPS_GIT)
 
-$(DEPSDIR)/$(OPUS_TAR):
-	mkdir -p $(DEPSDIR)
-	curl -L -o $@ $(OPUS_URL)
-	echo "$(OPUS_SHA256)  $@" | $(SHA256SUM) -c
+# ==== Dep bundle ====
+# One archive of every pinned source: unpack into DEPSDIR and build with
+# ZIPPY_OFFLINE=1. Sources are platform-neutral, so one bundle serves every
+# target sharing a DEPSDIR. Named by a digest of the pins, so a bump names a
+# different bundle.
+DEPS_PINS      := $(foreach d,$(TAR_DEPS),$(d)=$($(d)_SHA256)) \
+                  $(foreach d,$(GIT_DEPS),$(d)=$($(d)_COMMIT))
+DEPS_BUNDLE_ID := $(shell printf '%s\n' "$(DEPS_PINS)" | $(SHA256SUM) | cut -c1-12)
+DEPS_BUNDLE_EXT  := $(shell command -v zstd >/dev/null 2>&1 && echo tar.zst || echo tar.gz)
+DEPS_BUNDLE_COMP := $(if $(filter tar.zst,$(DEPS_BUNDLE_EXT)),--zstd,-z)
+DEPS_BUNDLE    ?= $(BASEDIR)/zippy-deps-$(DEPS_BUNDLE_ID).$(DEPS_BUNDLE_EXT)
 
-download: $(DEPSDIR)/$(TCL_TAR) $(DEPSDIR)/$(TK_TAR) $(DEPSDIR)/$(TDOM_TAR) $(DEPSDIR)/$(TCLLIB_TAR) $(MTLS_SRC) $(MBEDTLS_SRC) $(RTC_SRC) $(LIBDC_SRC) $(RTCMA_SRC) $(DEPSDIR)/$(OPUS_TAR) $(OMEMO_SRC) $(TCLWUFFS_SRC) $(TKDND_SRC) $(DEPSDIR)/$(IMG_TAR)
+# .git is kept by default — some dep build systems read it for versioning.
+# DEPS_BUNDLE_EXCLUDE_VCS=1 drops it, which is most of the size.
+DEPS_BUNDLE_TAR_EXCLUDE := $(if $(DEPS_BUNDLE_EXCLUDE_VCS),--exclude=.git,)
+
+.PHONY: dep-bundle unpack-deps flatpak-sources
+
+dep-bundle: download
+	tar $(DEPS_BUNDLE_COMP) $(DEPS_BUNDLE_TAR_EXCLUDE) -cf $(DEPS_BUNDLE) \
+	    -C $(DEPSDIR) $(foreach d,$(TAR_DEPS),$($(d)_TAR)) git
+	$(SHA256SUM) $(DEPS_BUNDLE)
+
+unpack-deps:
+	@[ -n "$(DEPS_BUNDLE_FILE)" ] || { \
+	    echo "usage: make -f zippy.mk unpack-deps DEPS_BUNDLE_FILE=<bundle>" >&2; exit 1; }
+	mkdir -p $(DEPSDIR)
+	tar xf $(DEPS_BUNDLE_FILE) -C $(DEPSDIR)
+
+# ==== Flatpak sources ====
+# Emit the pin table as a flatpak `sources:` list, so the pins are not hand-synced
+# into the manifest.
+#
+#   make -f zippy.mk flatpak-sources FLATPAK_DEPS_DIR=build/deps
+#
+# Paste the output into the module's `sources:` block (already indented for it).
+# Each git dep lands at the pristine path git-dep copies from, so the build finds
+# it staged and applies the project's patches itself.
+FLATPAK_DEPS_DIR ?= _build/deps
+
+flatpak-sources:
+	@$(foreach d,$(TAR_DEPS), \
+	    printf '      - type: file\n'                             ; \
+	    printf '        url: %s\n'            '$($(d)_URL)'       ; \
+	    printf '        sha256: %s\n'         '$($(d)_SHA256)'    ; \
+	    printf '        dest: %s\n'           '$(FLATPAK_DEPS_DIR)' ; \
+	    printf '        dest-filename: %s\n'  '$($(d)_TAR)'       ; )
+	@$(foreach d,$(GIT_DEPS), \
+	    printf '      - type: git\n'                              ; \
+	    printf '        url: %s\n'            '$($(d)_REPO)'      ; \
+	    printf '        commit: %s\n'         '$($(d)_COMMIT)'    ; \
+	    printf '        dest: %s\n'           '$(FLATPAK_DEPS_DIR)/git/$(notdir $($(d)_SRC))' ; )
 
 # ==== Extract ====
 # Clean-extract (rm -rf) then apply patches; see "Source patches".

@@ -50,6 +50,24 @@ proc mergeDir {src dst} {
     }
 }
 
+# Stamp every file and directory under $dir with one mtime. Depth-first, so each
+# directory is stamped after the children written inside it.
+proc normalizeMtimes {dir epoch} {
+    foreach entry [glob -nocomplain -directory $dir -- * .*] {
+        set tail [file tail $entry]
+        if {$tail eq "." || $tail eq ".."} continue
+        # Skip symlinks: [file mtime] follows the link and would stamp whatever
+        # it points at. [file isdirectory] follows them too, so test type first.
+        if {[file type $entry] eq "link"} continue
+        if {[file isdirectory $entry]} {
+            normalizeMtimes $entry $epoch
+        } else {
+            file mtime $entry $epoch
+        }
+    }
+    file mtime $dir $epoch
+}
+
 # Rewrite `load [file join $dir foo.so] Foo` to `load {} Foo` in a pkgIndex.tcl,
 # so the package resolves through Tcl_StaticPackage entries registered in
 # kitsh.c instead of trying to dlopen a non-existent shared library. Returns
@@ -229,6 +247,20 @@ if {$entryScript ne "" && $entryScript ne "main.tcl"} {
     }
     writeFile [file join $tmpDir main.tcl] \
         "source \[file join //zipfs:/app $entryScript\]\n"
+}
+
+# ==== 4b. Normalize timestamps ====
+# Every zip entry carries its file's mtime, so without this two builds of
+# identical sources differ byte-for-byte. Opt-in via SOURCE_DATE_EPOCH.
+#
+# Clamped to 1980-01-01: a zip entry stores an MS-DOS date and cannot represent
+# anything earlier, so a smaller epoch would be silently mangled.
+if {[info exists ::env(SOURCE_DATE_EPOCH)]} {
+    set sde [string trim $::env(SOURCE_DATE_EPOCH)]
+    if {![string is entier -strict $sde]} {
+        error "SOURCE_DATE_EPOCH must be an integer, got: $sde"
+    }
+    normalizeMtimes $tmpDir [expr {$sde < 315532800 ? 315532800 : $sde}]
 }
 
 # ==== 5. Build the zipfs image ====

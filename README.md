@@ -84,7 +84,9 @@ The output binary (`./myapp`) is placed at the project root.
 | `make wish`      | `./wish`       | Standalone wish with selected deps      |
 | `make tclsh`     | `./tclsh`      | Standalone tclsh with selected deps     |
 | `make lib`       | `./libmyapp.a` | Static library — see [Static library](#static-library) |
-| `make download`  |                | Download all source tarballs            |
+| `make download`  |                | Fetch all pinned sources                |
+| `make dep-bundle`|`zippy-deps-<id>.tar.zst`| Archive the fetched sources     |
+| `make unpack-deps`|               | Unpack a bundle into `DEPSDIR`          |
 | `make test`      |                | Run the integration smoke test          |
 | `make clean`     |                | Remove the build tree and built binaries |
 | `make distclean` |                | `clean` plus the downloaded sources     |
@@ -100,6 +102,50 @@ make -f zippy/zippy.mk SHELL_TYPE=tclsh DEPS="tdom mtls" tclsh
 
 This produces `./tclsh` with tdom and mtls baked in.
 
+## Offline builds
+
+`make download` is the only step that touches the network. Once `DEPSDIR` is
+populated, `ZIPPY_OFFLINE=1` builds without it, and any missing dep fails
+immediately naming itself:
+
+```
+make -f zippy/zippy.mk download
+make -f zippy/zippy.mk ZIPPY_OFFLINE=1 tclsh
+```
+
+`make dep-bundle` archives the fetched sources to move them between machines:
+
+```
+make -f zippy/zippy.mk dep-bundle
+make -f zippy/zippy.mk unpack-deps DEPS_BUNDLE_FILE=zippy-deps-<id>.tar.zst
+```
+
+The bundle is named for a digest of every pin. Checkouts keep their `.git`;
+`DEPS_BUNDLE_EXCLUDE_VCS=1` drops it.
+
+`DEPSDIR` defaults to `$(BASEDIR)/_build/deps` and is overridable, so targets
+with different `BASEDIR`s can share one cache:
+
+```
+$(MAKE) -f zippy/zippy.mk BASEDIR=$(CURDIR)/build/linux DEPSDIR=$(CURDIR)/build/deps app
+```
+
+Safe between native and Windows targets. Not safe for Android: `omemo` and
+`tclwuffs` build in-tree and only the Windows build redirects them to an
+isolated copy, so an Android build would leave its objects in a shared checkout.
+
+## Reproducible builds
+
+`SOURCE_DATE_EPOCH` normalizes the mtimes carried in the zipfs payload, remaps
+build paths out of debug info and `__FILE__` (`-ffile-prefix-map`), and is
+exported to dep build systems:
+
+```
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) make -f zippy/zippy.mk tclsh
+```
+
+Left unset, the build keeps real paths in the `.debug` sidecar for `addr2line`.
+
 ## Source patches
 
 Patches in `$(PATCHES_DIR)/<tree>/*.patch` — `patches/` in the consuming
@@ -107,6 +153,10 @@ project by default — apply to that source tree with `patch -p1`, in lexical
 order, right after extraction. `<tree>` is one of `tcl`, `tk`, `tcllib`,
 `tdom`, `img`, `opus`, `mbedtls`. A changed patch forces a clean re-extract of
 its tree.
+
+Git deps (`mbedtls`) are fetched pristine into `$(DEPSDIR)/git/<name>-<pin>` and
+copied to their build path before patching, so a changed patch re-applies
+without refetching and a pre-staged checkout still gets patched.
 
 ## Static library
 
