@@ -252,7 +252,10 @@ SQLITE3_DIR_SUFFIX := $(patsubst 3.%,%,$(SQLITE3_VER))
 # ==== Tarballs ====
 TCL_TAR    := tcl$(TCL_VER)-src.tar.gz
 TK_TAR     := tk$(TK_VER)-src.tar.gz
-TDOM_TAR   := tdom-latest-src.tar.gz
+# Upstream serves tdom from a rolling "latest" URL, so the local name has to
+# carry the version: a fixed name would keep an old tarball forever, and its
+# recipe (hence the sha256 check) never re-runs once the file exists.
+TDOM_TAR   := tdom-$(TDOM_VER)-src.tar.gz
 TCLLIB_TAR := tcllib-$(TCLLIB_VER).tar.gz
 IMG_TAR    := Img-$(IMG_VER).tar.gz
 
@@ -277,6 +280,7 @@ TCL_SRC    := $(DEPSDIR)/tcl$(TCL_VER)
 TK_SRC     := $(DEPSDIR)/tk$(TK_VER)
 TCLLIB_SRC := $(DEPSDIR)/tcllib-$(TCLLIB_VER)
 IMG_SRC    := $(DEPSDIR)/Img-$(IMG_VER)
+TDOM_SRC   := $(DEPSDIR)/tdom-$(TDOM_VER)-src
 
 # omemo/tclwuffs build objects into their own source tree (no out-of-tree
 # support). Native builds there directly; the Windows cross-build works from an
@@ -905,10 +909,18 @@ $(TCLLIB_SRC): $(DEPSDIR)/$(TCLLIB_TAR) $(TCLLIB_PATCHES)
 	$(call apply-patches,$@,$(TCLLIB_PATCHES))
 	touch $@
 
+# The tarball is whatever "latest" was when it was fetched, so check that it
+# unpacked the version TDOM_VER (and STATIC_PKGS) claims instead of building
+# some other tree.
 $(DEPSDIR)/.tdom_extracted: $(DEPSDIR)/$(TDOM_TAR) $(TDOM_PATCHES)
-	rm -rf $(DEPSDIR)/tdom-$(TDOM_VER)-src
+	rm -rf $(TDOM_SRC)
 	tar xzf $< -C $(DEPSDIR)
-	$(call apply-patches,$(DEPSDIR)/tdom-$(TDOM_VER)-src,$(TDOM_PATCHES))
+	@[ -d $(TDOM_SRC) ] || { \
+	    echo "zippy: $(TDOM_TAR) did not unpack $(notdir $(TDOM_SRC)):" >&2; \
+	    echo "  got $$(ls -d $(DEPSDIR)/tdom-*/ 2>/dev/null | tr '\n' ' ')" >&2; \
+	    echo "  update TDOM_VER/TDOM_SHA256 to match upstream latest-src." >&2; \
+	    exit 1; }
+	$(call apply-patches,$(TDOM_SRC),$(TDOM_PATCHES))
 	touch $@
 
 $(IMG_SRC): $(DEPSDIR)/$(IMG_TAR) $(IMG_PATCHES)
@@ -963,7 +975,7 @@ endif
 # Windows cross-build variants live in windows.mk, so guard the native recipe.
 ifndef CROSS_OVERLAY
 $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
-	cd $$(ls -d $(DEPSDIR)/tdom-*/) && \
+	cd $(TDOM_SRC) && \
 		CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
 		$(MAKE) -j$(NPROC) && \

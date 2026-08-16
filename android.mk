@@ -53,7 +53,7 @@ $(TCLSH): $(TCL_SRC)
 
 # ==== TEA deps ====
 $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
-	cd $$(ls -d $(DEPSDIR)/tdom-*/) && \
+	cd $(TDOM_SRC) && \
 		$(ANDROID_TC) CFLAGS="$(SIZE_CFLAGS)" CXXFLAGS="$(SIZE_CFLAGS)" \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
