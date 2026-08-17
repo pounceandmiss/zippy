@@ -918,7 +918,7 @@ $(DEPSDIR)/.tdom_extracted: $(DEPSDIR)/$(TDOM_TAR) $(TDOM_PATCHES)
 	@[ -d $(TDOM_SRC) ] || { \
 	    echo "zippy: $(TDOM_TAR) did not unpack $(notdir $(TDOM_SRC)):" >&2; \
 	    echo "  got $$(ls -d $(DEPSDIR)/tdom-*/ 2>/dev/null | tr '\n' ' ')" >&2; \
-	    echo "  update TDOM_VER/TDOM_SHA256 to match upstream latest-src." >&2; \
+	    echo "  Update TDOM_VER/TDOM_SHA256 to match upstream latest-src." >&2; \
 	    exit 1; }
 	$(call apply-patches,$(TDOM_SRC),$(TDOM_PATCHES))
 	touch $@
