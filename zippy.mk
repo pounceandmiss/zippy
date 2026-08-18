@@ -821,11 +821,16 @@ endif
 # checkout still gets patched instead of silently building unpatched.
 #
 # Costs a second copy on disk, or near-nothing where CP_TREE can share extents.
+#
+# touch because CP_TREE preserves the pristine checkout's timestamps: without it
+# the copy stays older than a patch that was checked out later, so every run
+# re-copies and re-patches. A fresh clone or worktree always lands that way.
 define git-dep
 $$($(1)_SRC): $$($(1)_GIT) $$($(1)_PATCHES)
 	rm -rf $$@
 	$$(CP_TREE) $$< $$@
 	$$(call apply-patches,$$@,$$($(1)_PATCHES))
+	touch $$@
 endef
 
 $(foreach d,$(TAR_DEPS),$(eval $(call fetch-tar,$(d))))
