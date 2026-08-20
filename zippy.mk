@@ -802,14 +802,18 @@ $$(DEPSDIR)/$$($(1)_TAR):
 	echo "$$($(1)_SHA256)  $$@" | $$(SHA256SUM) -c
 endef
 
-# rm -rf clears a half-finished clone left by an interrupted run, which git
-# clone would otherwise refuse to write into.
+# Cloned into a .tmp beside the target and renamed only once the checkout and
+# submodules are done, so the target directory never exists half-finished. Make
+# has no prerequisites to compare a fetched dep against — it only asks whether
+# the directory is there — so a run interrupted mid-clone would otherwise be
+# taken as complete on the next run and built at the wrong commit.
 define git-fetch
 $$($(1)_GIT):
 	mkdir -p $$(dir $$@)
-	rm -rf $$@
-	git clone $$($(1)_REPO) $$@
-	cd $$@ && git checkout $$($(1)_COMMIT) && git submodule update --init --recursive
+	rm -rf $$@.tmp
+	git clone $$($(1)_REPO) $$@.tmp
+	cd $$@.tmp && git checkout $$($(1)_COMMIT) && git submodule update --init --recursive
+	mv $$@.tmp $$@
 endef
 
 endif
@@ -825,11 +829,15 @@ endif
 # touch because CP_TREE preserves the pristine checkout's timestamps: without it
 # the copy stays older than a patch that was checked out later, so every run
 # re-copies and re-patches. A fresh clone or worktree always lands that way.
+#
+# Same .tmp-then-rename as git-fetch: an interrupted copy, or a patch that fails
+# partway, would otherwise leave a tree the next run accepts as finished.
 define git-dep
 $$($(1)_SRC): $$($(1)_GIT) $$($(1)_PATCHES)
-	rm -rf $$@
-	$$(CP_TREE) $$< $$@
-	$$(call apply-patches,$$@,$$($(1)_PATCHES))
+	rm -rf $$@ $$@.tmp
+	$$(CP_TREE) $$< $$@.tmp
+	$$(call apply-patches,$$@.tmp,$$($(1)_PATCHES))
+	mv $$@.tmp $$@
 	touch $$@
 endef
 
