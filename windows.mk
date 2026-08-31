@@ -36,30 +36,72 @@ SQLITE_WIN_LIB := $(SQLITE_BUILD)/libtcl9sqlite$(SQLITE_FLAT).a
 WIN_LIBZ       := $(PREFIX)/lib/libz.a
 LIBTOMCRYPT_WIN_LIB := $(LIBTOMCRYPT_BUILD)/libtomcrypt.a
 
+# Tcl/Tk cross-build trees, isolated for the same reason as the copies above.
+# The TEA deps below point --with-tcl at $(TCL_WIN_BUILD): it holds the
+# generated tclConfig.sh and the stub archive.
+TCL_WIN_BUILD  := $(BUILDDIR)/tcl
+TK_WIN_BUILD   := $(BUILDDIR)/tk
+
 # ==== Tcl / Tk (win/ cross-build) ====
 # $(TCLSH)/$(WISH) are the stamp files from zippy.mk; the host can't run the
 # produced .exe. make install puts tclConfig.sh/tkConfig.sh, the static archives
 # and the headers in $(PREFIX), where the deps and the kitsh link read them.
+#
+# Both build out-of-tree under $(BUILDDIR). The source lives in the shared
+# $(DEPSDIR), so an in-tree build leaves one toolchain's PE objects where
+# another's build reads them: `make win` and `make DOCKER=1 win` get separate
+# BASEDIRs but would share that object dir. Re-running configure doesn't help,
+# since no rule ties the .o files to the regenerated Makefile - the second
+# toolchain finds the tree up to date and installs the first one's archives for
+# a compiler whose libgcc doesn't match them.
+#
+# That holds only while the source stays object-free: VPATH covers win/ and
+# generic/, so a stale .o there outranks the rule that would rebuild it here.
+# The native build keeps its objects in unix/, off the win/ VPATH.
+#
+# `binaries` rather than the default `all`, and INSTALL_PACKAGE_TARGETS= on the
+# install, skip Tcl's bundled-package pass (pkgs/{itcl,tdbc*,sqlite3,thread}),
+# which builds each one as a DLL. It can't work here: the sub-configures resolve
+# TCLSH_PROG to the cross-built tclsh90s.exe and thread's zipfs step pipes
+# `zipfs mkzip` into it, so the zip is never written and the DLL link fails on
+# the missing file - swallowed, because `packages` is a shell for-loop. Nor is
+# it wanted: a static PE can't load a DLL out of the zipfs, $(THREAD_WIN_LIB)
+# and $(SQLITE_WIN_LIB) below cross-build those two as static archives, and the
+# pkgIndex.tcl files it installs only lead TCL_PKG_LIBS into bundling a `load`
+# of a DLL that isn't there. Both are plain make variables, so neither override
+# needs a patch to Tcl's Makefile.
+
+# Clear what an older in-tree build left in the shared source; VPATH would
+# resolve those in preference to building here. A freshly extracted tree is
+# already clean, and the stamp means this runs at most once per tree.
+define clean-stale-intree
+	rm -rf $(1)/pkgs
+	rm -f $(1)/*.o $(1)/*.a $(1)/*.exe $(1)/*.dll $(1)/*.zip \
+		$(1)/Makefile $(1)/config.status $(1)/config.cache \
+		$(1)/tclConfig.sh $(1)/tkConfig.sh $(1)/tclUuid.h
+endef
 
 $(TCLSH): $(TCL_SRC)
-	cd $(TCL_SRC)/win && \
+	$(call clean-stale-intree,$(TCL_SRC)/win)
+	mkdir -p $(TCL_WIN_BUILD)
+	cd $(TCL_WIN_BUILD) && \
 		CFLAGS="$(SIZE_CFLAGS)" \
-		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
+		$(TCL_SRC)/win/configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --enable-zipfs --disable-shared \
 			--with-system-libtommath=no && \
-		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
-		$(MAKE) -j$(NPROC) && \
-		$(MAKE) install TCL_EXE=$(HOST_TCLSH) && \
+		$(MAKE) -j$(NPROC) binaries && \
+		$(MAKE) install TCL_EXE=$(HOST_TCLSH) INSTALL_PACKAGE_TARGETS= && \
 		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH)
 	touch $@
 
 $(WISH): $(TK_SRC) $(TCLSH)
-	cd $(TK_SRC)/win && \
+	$(call clean-stale-intree,$(TK_SRC)/win)
+	mkdir -p $(TK_WIN_BUILD)
+	cd $(TK_WIN_BUILD) && \
 		CFLAGS="$(SIZE_CFLAGS)" \
-		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
+		$(TK_SRC)/win/configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib \
 			--enable-zipfs --disable-shared && \
-		sed $(SED_INPLACE_FLAG) 's/--enable-shared; ) || exit/--disable-shared; ) || exit/g' Makefile && \
 		$(MAKE) -j$(NPROC) && \
 		$(MAKE) install TCL_EXE=$(HOST_TCLSH) && \
 		$(MAKE) install-libraries TCL_EXE=$(HOST_TCLSH)
@@ -79,7 +121,7 @@ $(THREAD_WIN_LIB): $(TCLSH)
 		$(THREAD_BUILD)/config.status $(THREAD_BUILD)/config.cache $(THREAD_BUILD)/Makefile
 	cd $(THREAD_BUILD) && \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
-			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
+			--with-tcl=$(TCL_WIN_BUILD) --prefix=$(PREFIX) \
 			--disable-shared --enable-threads && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 
@@ -112,7 +154,7 @@ $(SQLITE_WIN_LIB): $(TCLSH) $(SQLCIPHER_SRC)/tclsqlite3.c $(LIBTOMCRYPT_WIN_LIB)
 			-DSQLCIPHER_LOG_LEVEL_DEFAULT=0" \
 		CPPFLAGS="-I$(LIBTOMCRYPT_BUILD)/src/headers" \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
-			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
+			--with-tcl=$(TCL_WIN_BUILD) --prefix=$(PREFIX) \
 			--disable-shared && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 
@@ -161,7 +203,7 @@ $(PREFIX)/.tdom_installed: $(DEPSDIR)/$(TDOM_TAR) $(TCLSH)
 	cd $(BUILDDIR)/tdom && \
 		CFLAGS="$(SIZE_CFLAGS)" \
 		$(BUILDDIR)/tdom-src/configure --host=$(CROSS) --build=$(CROSS_BUILD) \
-			--prefix=$(PREFIX) --with-tcl=$(TCL_SRC)/win --disable-shared && \
+			--prefix=$(PREFIX) --with-tcl=$(TCL_WIN_BUILD) --disable-shared && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
 		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH)
 	touch $@
@@ -173,7 +215,7 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 	cd $(BUILDDIR)/mtls && \
 		CFLAGS="$(SIZE_CFLAGS)" \
 		$(MTLS_SRC)/configure --host=$(CROSS) --build=$(CROSS_BUILD) \
-			--prefix=$(PREFIX) --with-tcl=$(TCL_SRC)/win --disable-shared \
+			--prefix=$(PREFIX) --with-tcl=$(TCL_WIN_BUILD) --disable-shared \
 			--with-mbedtls=$(PREFIX) \
 			CPPFLAGS='-DMBEDTLS_USER_CONFIG_FILE=\"$(MBEDTLS_USER_CFG)\"' && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
@@ -271,7 +313,9 @@ endif
 # #ifdef (not the value), so even =0 routes the bootstrap (TclZipfs_AppHook,
 # Tcl_FindExecutable, Tcl_MainEx) through TclStubCall, which dlopens tcl90.dll
 # and aborts in a static build. Leaving them undefined links the core directly.
-KITSH_CFLAGS := -I$(PREFIX)/include -I$(TCL_SRC)/win -municode \
+# The win/ headers split across two dirs: generated ones (tclUuid.h) land in
+# $(TCL_WIN_BUILD), checked-in ones (tclWinPort.h, tclWinInt.h) stay in source.
+KITSH_CFLAGS := -I$(PREFIX)/include -I$(TCL_WIN_BUILD) -I$(TCL_SRC)/win -municode \
                 -DSTATIC_BUILD -DRTC_STATIC
 
 KITSH_BUNDLED_LIBS := $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB) $(LIBTOMCRYPT_WIN_LIB)
@@ -315,6 +359,13 @@ $(KITSH_ICON_OBJ): $(WIN_ICON)
 
 $(KITSH_WISH) $(KITSH_TCLSH): $(KITSH_ICON_OBJ)
 endif
+
+# dde and registry come from the core's `binaries` target and install as DLLs
+# with a pkgIndex.tcl. TCL_PKG_LIBS globs any dir holding one, so without this
+# they ride into the bundle, where build.tcl strips the DLL and rewrites the
+# load to `load {} Dde` - resolving to nothing, since neither is in STATIC_PKGS.
+# Matched by pattern: their versions track the Tcl release, not a zippy pin.
+_TCL_PKG_EXCLUDE += dde% registry%
 
 # ==== Bundle the script library into a runnable exe ====
 # The launcher alone can't boot: kitsh.c's TclZipfs_AppHook expects the Tcl/Tk

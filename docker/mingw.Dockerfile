@@ -20,7 +20,7 @@ RUN update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32
     && update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
 
 # Native tcl9.0 for HOST_TCLSH (the zipfs bundling step) and for the cross
-# install steps that run a native interp (install-tzdata, thread's zipfs mkzip).
+# install steps that run a native interp (installData.tcl, install-tzdata).
 # Debian ships only 8.6, so build the same 9.0.x zippy pins, verified by sha.
 # Any 9.0.x matches the bundled 9.0 library line.
 RUN curl -fsSL http://prdownloads.sourceforge.net/tcl/tcl9.0.3-src.tar.gz -o /tmp/tcl.tar.gz \
