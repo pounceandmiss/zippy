@@ -55,9 +55,14 @@ ZIPPYDIR     := $(abspath $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST)))))
 BASEDIR      := $(CURDIR)
 
 # ==== Host tool portability ====
-# macOS has shasum rather than sha256sum (both take -c over "<hash>  <file>"),
-# and BSD sed's -i requires a backup-suffix argument where GNU sed's is optional.
-SHA256SUM        := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo shasum -a 256)
+# macOS 13+ ships its own /sbin/sha256sum, but with BSD-only flags (no GNU
+# -c-reads-stdin), so select by host rather than by command -v.
+# BSD sed's -i requires a backup-suffix argument where GNU sed's is optional.
+ifeq ($(shell uname -s),Darwin)
+  SHA256SUM      := shasum -a 256
+else
+  SHA256SUM      := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo shasum -a 256)
+endif
 # Whole-tree copy (see git-dep). GNU cp shares extents on btrfs/xfs, making the
 # copy near-free; BSD/macOS cp pays a real one. --version detects GNU.
 CP_TREE          := $(shell cp --version >/dev/null 2>&1 && echo "cp -a --reflink=auto" || echo "cp -a")
