@@ -174,6 +174,13 @@ SQLITE3_VER := 3.51.0
 ITCL_VER    := 4.3.5
 TDBC_VER    := 1.1.13
 
+# SQLCipher supplies the sqlite3 Tcl package's tclsqlite3.c (same
+# Sqlite3_Init symbol, same "sqlite3" command) with page-level encryption via
+# PRAGMA key. Crypto provider is LibTomCrypt, not mbedtls: SQLCipher's codec
+# providers are a closed set (OpenSSL/LibTomCrypt/CommonCrypto/NSS).
+SQLCIPHER_VER   := 4.18.0
+LIBTOMCRYPT_VER := 1.18.2
+
 # Img (tkimg). Bundles its own libpng/libjpeg/libtiff/zlib — no system deps.
 IMG_VER       := 2.1.1
 IMG_ZLIB_VER  := 1.3.2
@@ -190,6 +197,18 @@ MBEDTLS_REPO      := https://github.com/Mbed-TLS/mbedtls.git
 MBEDTLS_COMMIT    := 5b64a9fdb979c8971561ec78221b528e3cc4e00a
 MBEDTLS_SRC       := $(DEPSDIR)/mbedtls-$(MBEDTLS_COMMIT)
 MBEDTLS_USER_CFG  := $(ZIPPYDIR)/mbedtls-user-config.h
+
+# SQLCipher. See SQLCIPHER_VER above for why LibTomCrypt and not mbedtls.
+SQLCIPHER_REPO      := https://github.com/sqlcipher/sqlcipher.git
+SQLCIPHER_COMMIT    := 63697beb0fafcb61faa7a3e6fd267036548ab11b
+SQLCIPHER_SRC       := $(DEPSDIR)/sqlcipher-$(SQLCIPHER_COMMIT)
+
+# LibTomCrypt: SQLCipher's crypto provider (AES/SHA/HMAC/PBKDF2/Fortuna PRNG).
+# libtommath is not needed - only RSA/ECC/DH touch the bignum math providers,
+# none of which SQLCipher's codec uses.
+LIBTOMCRYPT_REPO    := https://github.com/libtom/libtomcrypt.git
+LIBTOMCRYPT_COMMIT  := 7e7eb695d581782f04b24dc444cbfde86af59853
+LIBTOMCRYPT_SRC     := $(DEPSDIR)/libtomcrypt-$(LIBTOMCRYPT_COMMIT)
 
 # Rtc (libdatachannel-tcl). C++ Tcl 9 binding for libdatachannel. Built via
 # cmake with RTC_BUNDLE_LIBDATACHANNEL=ON so libdatachannel/juice/srtp2/
@@ -248,6 +267,12 @@ TKDND_SRC    := $(DEPSDIR)/tkdnd-$(TKDND_COMMIT)
 # sqlite3 dir/lib suffix collapses the leading "3." of SQLITE3_VER into the "3"
 # of the package name (dir is sqlite3.51.0 for version 3.51.0).
 SQLITE3_DIR_SUFFIX := $(patsubst 3.%,%,$(SQLITE3_VER))
+
+# Where the sqlite3 TEA wrapper (see the $(TCL_SRC) extract rule) is stashed,
+# and where SQLCipher builds it - one shared dir, since each target's recipe
+# (native below, windows.mk, android.mk) compiles a fresh copy from it.
+SQLITE3_TCL_WRAPPER := $(DEPSDIR)/sqlite3-tcl-wrapper
+SQLCIPHER_TCL_BUILD  := $(BUILDDIR)/sqlcipher-tcl
 
 # ==== Tarballs ====
 TCL_TAR    := tcl$(TCL_VER)-src.tar.gz
@@ -366,7 +391,10 @@ ifneq (,$(WIN)$(MACOS))
 endif
 
 # ==== Dependency mapping ====
-DEP_STAMPS :=
+# sqlite3/libtomcrypt are unconditional (like Thread), not gated by a DEPS
+# filter - same tier as the always-on entries in STATIC_PKGS/KITSH_BUNDLED_LIBS.
+DEP_STAMPS := $(PREFIX)/.libtomcrypt_installed \
+              $(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a
 DEP_LIBS =
 
 ifneq (,$(filter tdom,$(DEPS)))
@@ -501,7 +529,8 @@ TCL_PKG_LIBS = $(filter-out $(foreach e,$(_TCL_PKG_EXCLUDE),$(PREFIX)/lib/$e) $(
 # ==== KITSH static libs ====
 KITSH_BUNDLED_LIBS := \
     $(PREFIX)/lib/thread$(THREAD_VER)/libtcl9thread$(THREAD_VER).a \
-    $(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a
+    $(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a \
+    $(PREFIX)/lib/libtomcrypt.a
 
 # Lazy expansion so wildcards resolve at recipe time (after deps are built)
 KITSH_DEP_LIBS =
@@ -753,6 +782,7 @@ TDOM_PATCHES   := $(call patches-for,tdom)
 IMG_PATCHES    := $(call patches-for,img)
 OPUS_PATCHES   := $(call patches-for,opus)
 MBEDTLS_PATCHES := $(call patches-for,mbedtls)
+SQLCIPHER_PATCHES := $(call patches-for,sqlcipher)
 
 # ==== Download ====
 # The only phase that touches the network. Everything here is content-addressed
@@ -760,7 +790,7 @@ MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 # build needs — see ZIPPY_OFFLINE below.
 
 TAR_DEPS := TCL TK TDOM TCLLIB IMG OPUS
-GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA OMEMO TCLWUFFS TKDND
+GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA OMEMO TCLWUFFS TKDND SQLCIPHER LIBTOMCRYPT
 
 # Pristine per-pin checkout for each git dep, kept apart from the tree the build
 # uses. See git-dep below for why the two are separate.
@@ -904,10 +934,20 @@ flatpak-sources:
 # ==== Extract ====
 # Clean-extract (rm -rf) then apply patches; see "Source patches".
 
+# Stash Tcl's bundled sqlite3 TEA wrapper (configure.ac/Makefile.in/
+# pkgIndex.tcl.in/tclconfig - everything except generic/tclsqlite3.c, which
+# SQLCipher regenerates) into $(SQLITE3_TCL_WRAPPER), then remove the
+# original from $(TCL_SRC)/pkgs so Tcl's own native/Android `make install`
+# never builds it. SQLCipher's own recipe below builds the package instead,
+# under the same package/symbol name, from the stashed wrapper.
 $(TCL_SRC): $(DEPSDIR)/$(TCL_TAR) $(TCL_PATCHES)
 	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
 	$(call apply-patches,$@,$(TCL_PATCHES))
+	rm -rf $(SQLITE3_TCL_WRAPPER)
+	mkdir -p $(SQLITE3_TCL_WRAPPER)
+	cp -a $@/pkgs/sqlite3.$(SQLITE3_DIR_SUFFIX)/. $(SQLITE3_TCL_WRAPPER)/
+	rm -rf $@/pkgs/sqlite3.$(SQLITE3_DIR_SUFFIX)
 	touch $@
 
 $(TK_SRC): $(DEPSDIR)/$(TK_TAR) $(TK_PATCHES)
@@ -980,6 +1020,51 @@ $(WISH): $(TK_SRC) $(TCLSH)
 		$(MAKE) install && \
 		$(MAKE) install-libraries
 
+endif
+
+# ==== sqlite3 (SQLCipher-backed) ====
+# tclsqlite3.c is a plain-text amalgamation (sqlite3.c + codec/crypto
+# providers + tclsqlite.c) generated by SQLCipher's own jimsh-based tooling.
+# Generation is host-only and target-independent, so one generated file is
+# reused to build every target below - the codec/crypto-provider choice is a
+# compile-time #ifdef inside it, not baked in at this step.
+$(SQLCIPHER_SRC)/tclsqlite3.c: $(SQLCIPHER_SRC)
+	cd $(SQLCIPHER_SRC) && ./configure --disable-tcl && $(MAKE) tclsqlite3.c
+
+# LibTomCrypt has no configure script, just a plain recursive Makefile
+# respecting CC/AR/RANLIB; windows.mk/android.mk override those three for
+# their cross toolchains. No CFLAGS override: its Makefile assigns CFLAGS
+# with a plain '=', which would clobber its own -I./src/headers.
+ifndef CROSS_OVERLAY
+$(PREFIX)/.libtomcrypt_installed: $(LIBTOMCRYPT_SRC)
+	$(MAKE) -C $(LIBTOMCRYPT_SRC) -j$(NPROC)
+	mkdir -p $(PREFIX)/include $(PREFIX)/lib
+	cp -r $(LIBTOMCRYPT_SRC)/src/headers/. $(PREFIX)/include/
+	cp $(LIBTOMCRYPT_SRC)/libtomcrypt.a $(PREFIX)/lib/
+	touch $@
+endif
+
+# The Tcl package build reuses the stashed sqlite3 TEA wrapper
+# ($(SQLITE3_TCL_WRAPPER)) with just generic/tclsqlite3.c swapped for
+# SQLCipher's, so the package keeps the exact "sqlite3"/Sqlite3_Init name
+# static_pkgs.h and KITSH_BUNDLED_LIBS already expect at this path.
+ifndef CROSS_OVERLAY
+$(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a: \
+		$(TCL_SRC) $(SQLCIPHER_SRC)/tclsqlite3.c $(TCLSH) $(PREFIX)/.libtomcrypt_installed
+	rm -rf $(SQLCIPHER_TCL_BUILD)
+	mkdir -p $(SQLCIPHER_TCL_BUILD)
+	cp -a $(SQLITE3_TCL_WRAPPER)/. $(SQLCIPHER_TCL_BUILD)/
+	cp $(SQLCIPHER_SRC)/tclsqlite3.c $(SQLCIPHER_TCL_BUILD)/generic/tclsqlite3.c
+	cp $(SQLCIPHER_SRC)/sqlite3.h $(SQLCIPHER_TCL_BUILD)/generic/sqlite3.h
+	cd $(SQLCIPHER_TCL_BUILD) && \
+		CFLAGS="$(SIZE_CFLAGS) -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_LIBTOMCRYPT \
+			-DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
+			-DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLITE_TEMP_STORE=2 \
+			-DSQLCIPHER_LOG_LEVEL_DEFAULT=0" \
+		CPPFLAGS="-I$(PREFIX)/include" \
+		./configure --prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
+		$(MAKE) -j$(NPROC) && \
+		$(MAKE) install
 endif
 
 # ==== Build extensions ====

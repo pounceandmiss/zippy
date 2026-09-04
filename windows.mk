@@ -22,14 +22,19 @@ TKDND_FLAT   := $(subst .,,$(TKDND_VER))
 # so cross-building there too would cross-link ELF and PE objects and re-touch
 # the archive the kitsh link reads. Build in private copies under $(BUILDDIR).
 THREAD_PKG     := $(TCL_SRC)/pkgs/thread$(THREAD_VER)
-SQLITE_PKG     := $(TCL_SRC)/pkgs/sqlite$(SQLITE3_VER)
+# The sqlite3 TEA wrapper (not stock sqlite: zippy.mk's $(TCL_SRC) extract
+# rule stashes it to $(SQLITE3_TCL_WRAPPER) and removes the original from
+# pkgs/, since there's no native sqlite3 build here to collide with anyway).
+SQLITE_PKG     := $(SQLITE3_TCL_WRAPPER)
 WIN_ZLIB_SRC   := $(TCL_SRC)/compat/zlib
 THREAD_BUILD   := $(BUILDDIR)/thread
 SQLITE_BUILD   := $(BUILDDIR)/sqlite
 WIN_ZLIB_BUILD := $(BUILDDIR)/zlib
+LIBTOMCRYPT_BUILD  := $(BUILDDIR)/libtomcrypt
 THREAD_WIN_LIB := $(THREAD_BUILD)/libtcl9thread$(THREAD_FLAT).a
 SQLITE_WIN_LIB := $(SQLITE_BUILD)/libtcl9sqlite$(SQLITE_FLAT).a
 WIN_LIBZ       := $(PREFIX)/lib/libz.a
+LIBTOMCRYPT_WIN_LIB := $(LIBTOMCRYPT_BUILD)/libtomcrypt.a
 
 # ==== Tcl / Tk (win/ cross-build) ====
 # $(TCLSH)/$(WISH) are the stamp files from zippy.mk; the host can't run the
@@ -78,13 +83,32 @@ $(THREAD_WIN_LIB): $(TCLSH)
 			--disable-shared --enable-threads && \
 		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH)
 
-$(SQLITE_WIN_LIB): $(TCLSH)
+# LibTomCrypt has no configure script; cross-compile the plain Makefile with
+# CC/AR/RANLIB pointed at mingw, same convention as $(WIN_LIBZ) below.
+$(LIBTOMCRYPT_WIN_LIB): $(LIBTOMCRYPT_SRC)
+	rm -rf $(LIBTOMCRYPT_BUILD)
+	mkdir -p $(LIBTOMCRYPT_BUILD)
+	cp -a $(LIBTOMCRYPT_SRC)/. $(LIBTOMCRYPT_BUILD)/
+	$(MAKE) -C $(LIBTOMCRYPT_BUILD) CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib -j$(NPROC)
+
+# sqlite3 here is the SQLCipher-generated tclsqlite3.c (see zippy.mk's
+# $(SQLCIPHER_SRC)/tclsqlite3.c rule, generated once on the host and reused
+# for every target), not stock sqlite - same codec/libtomcrypt CFLAGS as the
+# native recipe.
+$(SQLITE_WIN_LIB): $(TCLSH) $(SQLCIPHER_SRC)/tclsqlite3.c $(LIBTOMCRYPT_WIN_LIB)
 	rm -rf $(SQLITE_BUILD)
 	mkdir -p $(SQLITE_BUILD)
 	cp -a $(SQLITE_PKG)/. $(SQLITE_BUILD)/
+	cp $(SQLCIPHER_SRC)/tclsqlite3.c $(SQLITE_BUILD)/generic/tclsqlite3.c
+	cp $(SQLCIPHER_SRC)/sqlite3.h $(SQLITE_BUILD)/generic/sqlite3.h
 	rm -f $(SQLITE_BUILD)/*.o $(SQLITE_BUILD)/*.a \
 		$(SQLITE_BUILD)/config.status $(SQLITE_BUILD)/config.cache $(SQLITE_BUILD)/Makefile
 	cd $(SQLITE_BUILD) && \
+		CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_LIBTOMCRYPT \
+			-DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
+			-DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLITE_TEMP_STORE=2 \
+			-DSQLCIPHER_LOG_LEVEL_DEFAULT=0" \
+		CPPFLAGS="-I$(LIBTOMCRYPT_BUILD)/src/headers" \
 		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
 			--with-tcl=$(TCL_SRC)/win --prefix=$(PREFIX) \
 			--disable-shared && \
@@ -236,7 +260,7 @@ $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 
 # Build the package archives + libz before the kitsh link; they aren't pulled in
 # by $(WISH). Adds prerequisites without redefining the recipe.
-$(KITSH_WISH) $(KITSH_TCLSH): $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB) $(WIN_LIBZ)
+$(KITSH_WISH) $(KITSH_TCLSH): $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB) $(LIBTOMCRYPT_WIN_LIB) $(WIN_LIBZ)
 
 # C++ link driver, libstdc++ and the -xc wrapper only when a C++ dep (rtc/rtcma)
 # is linked, matching zippy.mk's native gating; a pure-C build links with gcc.
@@ -259,7 +283,7 @@ endif
 KITSH_CFLAGS := -I$(PREFIX)/include -I$(TCL_SRC)/win -municode \
                 -DSTATIC_BUILD -DRTC_STATIC
 
-KITSH_BUNDLED_LIBS := $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB)
+KITSH_BUNDLED_LIBS := $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB) $(LIBTOMCRYPT_WIN_LIB)
 
 KITSH_TCL_LIBS = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
     $(PREFIX)/lib/libtcl$(TCL_FLAT).a $(PREFIX)/lib/libtclstub.a $(WIN_LIBZ)

@@ -51,6 +51,37 @@ $(TCLSH): $(TCL_SRC)
 		$(MAKE) install-libraries TCLSH_PROG=$(HOST_TCLSH) && \
 		cp $(TCL_SRC)/pkgs/thread$(THREAD_VER)/lib/ttrace.tcl $(PREFIX)/lib/thread$(THREAD_VER)/
 
+# ==== sqlite3 (SQLCipher-backed) ====
+# Tcl's own pkgs/sqlite3.$(SQLITE3_DIR_SUFFIX) is already gone by the time
+# $(TCLSH) above runs (see zippy.mk's $(TCL_SRC) extract rule), so that
+# install never builds a conflicting Sqlite3_Init. Same generated
+# tclsqlite3.c as every other target, cross-compiled the same isolated-copy
+# way as the native recipe.
+$(PREFIX)/.libtomcrypt_installed: $(LIBTOMCRYPT_SRC)
+	$(MAKE) -C $(LIBTOMCRYPT_SRC) $(ANDROID_TC) -j$(NPROC)
+	mkdir -p $(PREFIX)/include $(PREFIX)/lib
+	cp -r $(LIBTOMCRYPT_SRC)/src/headers/. $(PREFIX)/include/
+	cp $(LIBTOMCRYPT_SRC)/libtomcrypt.a $(PREFIX)/lib/
+	touch $@
+
+$(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a: \
+		$(TCL_SRC) $(SQLCIPHER_SRC)/tclsqlite3.c $(TCLSH) $(PREFIX)/.libtomcrypt_installed
+	rm -rf $(SQLCIPHER_TCL_BUILD)
+	mkdir -p $(SQLCIPHER_TCL_BUILD)
+	cp -a $(SQLITE3_TCL_WRAPPER)/. $(SQLCIPHER_TCL_BUILD)/
+	cp $(SQLCIPHER_SRC)/tclsqlite3.c $(SQLCIPHER_TCL_BUILD)/generic/tclsqlite3.c
+	cp $(SQLCIPHER_SRC)/sqlite3.h $(SQLCIPHER_TCL_BUILD)/generic/sqlite3.h
+	cd $(SQLCIPHER_TCL_BUILD) && \
+		$(ANDROID_TC) CFLAGS="$(SIZE_CFLAGS) -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_LIBTOMCRYPT \
+			-DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
+			-DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLITE_TEMP_STORE=2 \
+			-DSQLCIPHER_LOG_LEVEL_DEFAULT=0" \
+		CPPFLAGS="-I$(PREFIX)/include" \
+		./configure --host=$(CROSS) --build=$(CROSS_BUILD) \
+			--prefix=$(PREFIX) --with-tcl=$(PREFIX)/lib --disable-shared && \
+		$(MAKE) -j$(NPROC) TCLSH_PROG=$(HOST_TCLSH) && \
+		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH)
+
 # ==== TEA deps ====
 $(PREFIX)/.tdom_installed: $(DEPSDIR)/.tdom_extracted $(TCLSH)
 	cd $(TDOM_SRC) && \
@@ -117,7 +148,10 @@ ifneq (,$(filter rtc rtcma,$(DEPS)))
 else
   KITSH_LD := $(ANDROID_CC)
 endif
-KITSH_SYSLIBS := -lz -lm
+# -llog: SQLCipher's own diagnostic logging (sqlcipher_log, used by e.g. its
+# "no key"/HMAC-failure messages) is Android-aware and calls
+# __android_log_write/__android_log_print directly on this platform.
+KITSH_SYSLIBS := -lz -lm -llog
 
 # ==== bundle the script library onto the launcher ====
 # Mirrors the native tclsh target but bundles with HOST_TCLSH (the host can't run
