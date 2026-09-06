@@ -180,34 +180,23 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH)
 	touch $@
 
-# picomemo's Makefile builds in-tree (objects in build/, archive at top), so
-# cross-compile in an isolated copy ($(OMEMO_BUILD)) rather than the shared
-# $(OMEMO_SRC): a native build there leaves ELF objects in build/ that the
-# Makefile would treat as up-to-date and archive into the PE build. cp -a brings
-# the picomemo submodule along; the rm drops any native build/ + archives.
+# picomemo's OUTDIR keeps every object and the archive under $(OMEMO_BUILD), so
+# the PE build never sees the ELF objects a native build leaves in the shared
+# $(OMEMO_SRC) and the two can run against one checkout.
 $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
-	rm -rf $(OMEMO_BUILD)
-	mkdir -p $(OMEMO_BUILD)
-	cp -a $(OMEMO_SRC)/. $(OMEMO_BUILD)/
-	rm -rf $(OMEMO_BUILD)/build $(OMEMO_BUILD)/libtcl9omemo*.a $(OMEMO_BUILD)/libtcl9omemo*.so
-	$(MAKE) -C $(OMEMO_BUILD) libtcl9omemo$(OMEMO_VER).a \
+	$(MAKE) -C $(OMEMO_SRC) OUTDIR=$(OMEMO_BUILD) \
+		$(OMEMO_BUILD)/libtcl9omemo$(OMEMO_VER).a \
 		CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib \
 		TCL_PREFIX=$(PREFIX) MBED_PREFIX=$(PREFIX) CFLAGS="$(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 
-# tclwuffs/tkwuffs via their Makefile (in-tree, objects in build/), cross-built
-# in an isolated copy ($(TCLWUFFS_BUILD)) against the Windows
-# tclConfig.sh/tkConfig.sh in $(PREFIX), for the same reason as omemo above.
-# cp -a carries the vendored wuffs/stb sources; the rm drops native build/ +
-# archives. TCLWUFFS_MAKE_TARGETS/TCLWUFFS_EXTRA_DEPS come from zippy.mk
-# (tkwuffs adds Tk + $(WISH)).
+# tclwuffs/tkwuffs against the Windows tclConfig.sh/tkConfig.sh in $(PREFIX),
+# with OUTDIR isolating the objects for the same reason as omemo above.
+# TCLWUFFS_MAKE_TARGETS/TCLWUFFS_EXTRA_DEPS come from zippy.mk (tkwuffs adds
+# Tk + $(WISH)).
 $(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
-	rm -rf $(TCLWUFFS_BUILD)
-	mkdir -p $(TCLWUFFS_BUILD)
-	cp -a $(TCLWUFFS_SRC)/. $(TCLWUFFS_BUILD)/
-	rm -rf $(TCLWUFFS_BUILD)/build $(TCLWUFFS_BUILD)/libt*wuffs*.a $(TCLWUFFS_BUILD)/libt*wuffs*.so
-	$(MAKE) -C $(TCLWUFFS_BUILD) $(TCLWUFFS_MAKE_TARGETS) \
+	$(MAKE) -C $(TCLWUFFS_SRC) OUTDIR=$(TCLWUFFS_BUILD) $(TCLWUFFS_MAKE_TARGETS) \
 		CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib \
 		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
 		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \

@@ -244,7 +244,7 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
 OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
-OMEMO_COMMIT := 9523cb71d85510f61f342c84b1fc8176aff8797f
+OMEMO_COMMIT := 254ce9899878a159a8a5bcce575b6ab7437177b5
 OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl-$(OMEMO_COMMIT)
 
 # Tclwuffs. Memory-safe image decode/encode/resize on wuffs+stb. Two tiers:
@@ -252,7 +252,7 @@ OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl-$(OMEMO_COMMIT)
 # glue lives only in libtclwuffs.a.
 TCLWUFFS_VER    := 0.1.0
 TCLWUFFS_REPO   := https://github.com/pounceandmiss/tclwuffs.git
-TCLWUFFS_COMMIT := ddd4721499e2a2ad5f6ee0568c816591fbaf7e1b
+TCLWUFFS_COMMIT := d83096c91137102062a95adb431865b9b4ce9017
 TCLWUFFS_SRC    := $(DEPSDIR)/tclwuffs-$(TCLWUFFS_COMMIT)
 
 # Tkdnd. Native drag-and-drop for Tk (X11 XDND). TEA build that also ships Tcl
