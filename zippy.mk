@@ -393,8 +393,12 @@ endif
 # ==== Dependency mapping ====
 # sqlite3/libtomcrypt are unconditional (like Thread), not gated by a DEPS
 # filter - same tier as the always-on entries in STATIC_PKGS/KITSH_BUNDLED_LIBS.
-DEP_STAMPS := $(PREFIX)/.libtomcrypt_installed \
-              $(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a
+# Not on Windows: that overlay builds both into isolated $(BUILDDIR) copies and
+# hangs them off the kitsh link (KITSH_BUNDLED_LIBS), never installing either
+# into $(PREFIX), so naming the stamps here leaves them without a rule.
+DEP_STAMPS := $(if $(WIN),, \
+              $(PREFIX)/.libtomcrypt_installed \
+              $(PREFIX)/lib/sqlite3.$(SQLITE3_DIR_SUFFIX)/libtcl9sqlite3.$(SQLITE3_DIR_SUFFIX).a)
 DEP_LIBS =
 
 ifneq (,$(filter tdom,$(DEPS)))

@@ -89,6 +89,8 @@ $(LIBTOMCRYPT_WIN_LIB): $(LIBTOMCRYPT_SRC)
 	rm -rf $(LIBTOMCRYPT_BUILD)
 	mkdir -p $(LIBTOMCRYPT_BUILD)
 	cp -a $(LIBTOMCRYPT_SRC)/. $(LIBTOMCRYPT_BUILD)/
+	find $(LIBTOMCRYPT_BUILD) -name '*.o' -delete
+	rm -f $(LIBTOMCRYPT_BUILD)/libtomcrypt.a
 	$(MAKE) -C $(LIBTOMCRYPT_BUILD) CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib -j$(NPROC)
 
 # sqlite3 here is the SQLCipher-generated tclsqlite3.c (see zippy.mk's
