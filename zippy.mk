@@ -787,6 +787,7 @@ IMG_PATCHES    := $(call patches-for,img)
 OPUS_PATCHES   := $(call patches-for,opus)
 MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 SQLCIPHER_PATCHES := $(call patches-for,sqlcipher)
+RTCMA_PATCHES  := $(call patches-for,rtcma)
 
 # ==== Download ====
 # The only phase that touches the network. Everything here is content-addressed
@@ -1346,8 +1347,8 @@ endif
 # links: the SOURCES script tree lives in .rodata as a bare zip mounted via
 # TclZipfs_MountBuffer, merged with every static Tcl/dep archive. Shared by the
 # native build and the cross overlays - only the bare-zip bundling step (host
-# tclsh) and the binutils (KIT_LD/KIT_OBJCOPY/KIT_AR) differ per target, so an
-# overlay just overrides those vars and supplies its own $(SCRIPTS_ZIP) recipe.
+# tclsh) and the toolchain (KIT_CC/KIT_LD/KIT_OBJCOPY/KIT_AR) differ per target,
+# so an overlay just overrides those and supplies its own $(SCRIPTS_ZIP) recipe.
 #
 # The project supplies the shim C source that drives the embedded interp:
 #   LIB_SHIM_SRC  path to the shim .c (required for the `lib` target)
@@ -1358,6 +1359,7 @@ endif
 KIT_LD       ?= ld
 KIT_OBJCOPY  ?= $(OBJCOPY)
 KIT_AR       ?= $(AR)
+KIT_CC       ?= cc
 SCRIPTS_ZIP  := $(BUILDDIR)/scripts.zip
 SCRIPTS_OBJ  := $(BUILDDIR)/scripts.o
 SHIM_OBJ     := $(BUILDDIR)/shim.o
@@ -1385,13 +1387,23 @@ $(SCRIPTS_ZIP): $(DEP_STAMPS) $(BUILD_TCL) $(APP_SRC_FILES)
 		$(_STATIC_PKGS_CSV) $(DEP_LIBS) $(TCL_PKG_LIBS)
 endif
 
+scripts-obj: $(SCRIPTS_OBJ)
+ifdef MACOS
+# ld64 has neither GNU ld's `-b binary` nor an objcopy to rename the section
+# afterwards, so assemble the zip into __TEXT,__const and define the symbols
+# `ld -b binary` would have synthesised. Mach-O prefixes C symbols with an
+# underscore, hence the doubled one on the asm labels; the shim needs no _size.
+$(SCRIPTS_OBJ): $(SCRIPTS_ZIP)
+	printf '.section __TEXT,__const\n.p2align 4\n.globl __binary_scripts_zip_start\n__binary_scripts_zip_start:\n.incbin "%s"\n.globl __binary_scripts_zip_end\n__binary_scripts_zip_end:\n' "$(<F)" > $(@D)/scripts_blob.s
+	cd $(@D) && $(KIT_CC) -c scripts_blob.s -o $(@F)
+else
 # Park the zip in .rodata (demand-paged, read-only). `ld -b binary` names its
 # symbols after the *input filename*, so run it from $(@D) with a bare name to
 # get _binary_scripts_zip_{start,end,size}. objcopy moves .data -> .rodata.
-scripts-obj: $(SCRIPTS_OBJ)
 $(SCRIPTS_OBJ): $(SCRIPTS_ZIP)
 	cd $(@D) && $(KIT_LD) -r -b binary -o $(@F) $(<F)
 	$(KIT_OBJCOPY) --rename-section .data=.rodata,alloc,load,readonly,data,contents $@
+endif
 
 # The project's shim, compiled as C even under the g++ link driver via
 # -xc/-xnone, with the same -DWITH_* flags as the launcher (so its static-package
@@ -1404,6 +1416,18 @@ $(SHIM_OBJ): $(LIB_SHIM_SRC) $(ZIPPYDIR)/static_pkgs.h $(DEP_STAMPS)
 # lib$(LIB_NAME).a = shim + scripts.o + every static Tcl/dep archive, merged into
 # one archive with ar -M so GNU ld re-scans it without --start-group.
 lib: $(LIBOUT)
+ifdef MACOS
+# Apple's ar has no -M / MRI scripting. `libtool -static` is the Mach-O way to
+# fold objects and archives into one .a; ld64 re-scans a single archive to a
+# fixed point, so the consumer still needs no --start-group. Members that share
+# a basename draw a warning; __.SYMDEF indexes by offset, so linking is fine.
+$(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(DEP_STAMPS)
+	@[ -n "$(strip $(LIB_SHIM_SRC))" ] || \
+	    { echo "the 'lib' target needs LIB_SHIM_SRC set to the project's shim .c" >&2; exit 1; }
+	rm -f $@
+	libtool -static -no_warning_for_no_symbols -o $@ \
+	    $(SHIM_OBJ) $(SCRIPTS_OBJ) $(KITSH_TCL_LIBS)
+else
 $(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(DEP_STAMPS)
 	@[ -n "$(strip $(LIB_SHIM_SRC))" ] || \
 	    { echo "the 'lib' target needs LIB_SHIM_SRC set to the project's shim .c" >&2; exit 1; }
@@ -1413,6 +1437,7 @@ $(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(DEP_STAMPS)
 	  echo 'addmod $(SCRIPTS_OBJ)'; \
 	  $(foreach a,$(KITSH_TCL_LIBS),echo 'addlib $(a)';) \
 	  echo 'save'; echo 'end'; } | $(KIT_AR) -M
+endif
 
 # ==== Test ====
 # Smoke test that builds standalone tclsh/wish across DEPS combinations and
