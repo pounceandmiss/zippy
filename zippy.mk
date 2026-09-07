@@ -231,7 +231,7 @@ LIBDC_SRC    := $(DEPSDIR)/libdatachannel-$(LIBDC_COMMIT)
 # DEPS (enforced below).
 RTCMA_VER    := 0.1.0
 RTCMA_REPO   := https://github.com/pounceandmiss/rtc-ma.git
-RTCMA_COMMIT := 07442896dce38ccc150c5b396bbd6b39cbcf3545
+RTCMA_COMMIT := bf6e012ba36f6dc9a4611f1c0c54ad875489a265
 RTCMA_SRC    := $(DEPSDIR)/rtc-ma-$(RTCMA_COMMIT)
 
 # opus: rtc-ma's audio codec, pre-staged tarball so its cmake builds offline.
