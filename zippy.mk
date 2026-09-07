@@ -1146,9 +1146,16 @@ $(PREFIX)/.img_installed: $(IMG_SRC) $(WISH) $(IMG_PKGINDEX_TCL)
 	touch $@
 endif
 
+# cmake bakes the source path into CMakeCache.txt and refuses to configure when
+# it moves, which is what a pin bump does. Drop a cache that points elsewhere;
+# a matching one is left alone so an ordinary rebuild stays incremental.
+drop-moved-cmake-cache = grep -qxF 'CMAKE_HOME_DIRECTORY:INTERNAL=$(2)' \
+    $(1)/CMakeCache.txt 2>/dev/null || rm -rf $(1)
+
 # MBEDTLS_USER_CONFIG_FILE propagates as a PUBLIC compile def to consumers
 # via find_package(MbedTLS), so all callers see matching struct layouts.
 $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
+	@$(call drop-moved-cmake-cache,$(BUILDDIR)/mbedtls,$(MBEDTLS_SRC))
 	cmake -S $(MBEDTLS_SRC) -B $(BUILDDIR)/mbedtls $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -1169,6 +1176,7 @@ $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
 # into static archives under the build tree's vendor/lib; mbedtls is
 # resolved via find_package against $(PREFIX).
 $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(LIBDC_SRC) $(PREFIX)/.mbedtls_installed
+	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtc,$(RTC_SRC))
 	cmake -S $(RTC_SRC) -B $(BUILDDIR)/rtc $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -1193,6 +1201,7 @@ $(PREFIX)/.rtc_installed: $(TCLSH) $(RTC_SRC) $(LIBDC_SRC) $(PREFIX)/.mbedtls_in
 # install exists before rtcma's configure runs; the DEP_STAMPS block
 # above already errors out at make-parse time if rtc isn't in DEPS.
 $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_installed
+	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtcma,$(RTCMA_SRC))
 	cmake -S $(RTCMA_SRC) -B $(BUILDDIR)/rtcma $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
