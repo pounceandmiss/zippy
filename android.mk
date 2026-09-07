@@ -130,7 +130,7 @@ $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 	mkdir -p $(PREFIX)
 	touch $@
 
-$(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
+$(TCLWUFFS_STAMP): $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
 		$(ANDROID_TC) TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
 		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \

@@ -483,8 +483,15 @@ ifneq (,$(filter omemo,$(DEPS)))
   DEP_STAMPS += $(PREFIX)/.omemo_installed
   # Fully static-linked, no zipfs lib entry — see KITSH_DEP_LIBS below.
 endif
+# The stamp is named for the tier set, not the dep: one out-of-tree build dir is
+# shared by every target on this platform, so a tclsh-only run must not leave a
+# stamp that lets a later wish build skip the tkwuffs archive it never produced.
+TCLWUFFS_STAMP := $(PREFIX)/.tclwuffs_installed
+ifneq (,$(filter tkwuffs,$(DEPS)))
+  TCLWUFFS_STAMP := $(PREFIX)/.tclwuffs_tk_installed
+endif
 ifneq (,$(filter tclwuffs,$(DEPS)))
-  DEP_STAMPS += $(PREFIX)/.tclwuffs_installed
+  DEP_STAMPS += $(TCLWUFFS_STAMP)
   # Fully static-linked, no zipfs lib entry — see KITSH_DEP_LIBS below.
 endif
 ifneq (,$(filter tkwuffs,$(DEPS)))
@@ -496,8 +503,8 @@ ifneq (,$(filter tkwuffs,$(DEPS)))
   ifeq (,$(filter tclwuffs,$(DEPS)))
     $(error tkwuffs requires tclwuffs — add tclwuffs to DEPS)
   endif
-  # No extra DEP_STAMPS entry: .tclwuffs_installed's recipe builds the
-  # tkwuffs archive too when tkwuffs is in DEPS.
+  # No extra DEP_STAMPS entry: the tclwuffs stamp's recipe builds the tkwuffs
+  # archive too, and carries a name of its own when it does.
 endif
 ifneq (,$(filter tkdnd,$(DEPS)))
   ifeq ($(SHELL_TYPE),tclsh)
@@ -1224,7 +1231,7 @@ ifneq (,$(filter tkwuffs,$(DEPS)))
 endif
 
 ifndef CROSS_OVERLAY
-$(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
+$(TCLWUFFS_STAMP): $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
 		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
 		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \

@@ -195,7 +195,7 @@ $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 # with OUTDIR isolating the objects for the same reason as omemo above.
 # TCLWUFFS_MAKE_TARGETS/TCLWUFFS_EXTRA_DEPS come from zippy.mk (tkwuffs adds
 # Tk + $(WISH)).
-$(PREFIX)/.tclwuffs_installed: $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
+$(TCLWUFFS_STAMP): $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) OUTDIR=$(TCLWUFFS_BUILD) $(TCLWUFFS_MAKE_TARGETS) \
 		CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib \
 		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
