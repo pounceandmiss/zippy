@@ -1304,7 +1304,7 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_ins
 # RTCMV_BUILD_TK is always on: this cmake build is shared by every binary
 # in the BASEDIR, so its config can't vary per-binary. Whether the Tk
 # archive actually gets linked is decided below, by `rtcmv_tk` in DEPS.
-$(PREFIX)/.rtcmv_installed: $(TCLSH) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
+$(PREFIX)/.rtcmv_installed: $(TCLSH) $(WISH) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
 	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtcmv,$(RTCMV_SRC))
 	cmake -S $(RTCMV_SRC) -B $(BUILDDIR)/rtcmv $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
