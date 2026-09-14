@@ -246,6 +246,19 @@ OPUS_URL    := https://downloads.xiph.org/releases/opus/$(OPUS_TAR)
 OPUS_SHA256 := 6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
 OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 
+# Rtcmv (rtc-mv). Video-over-libdatachannel adapter (camera + libvpx VP8 +
+# RFC3550/7741 framing + a shared-memory frame ring) with its own Tcl 9
+# binding. Like rtcma it consumes libdatachannel from rtc's vendor prefix
+# and mbedtls from zippy's shared install, so `rtc` must also be in DEPS.
+# libvpx: bundled once BundleDeps.cmake pins a verified tarball; for now
+# the recipe below uses the system libvpx via pkg-config and the launcher
+# link adds -lvpx (see LIBVPX_SYS_LIBS).
+RTCMV_VER    := 0.1.0
+RTCMV_REPO   := https://codeberg.org/another-im/rtc-mv.git
+RTCMV_COMMIT := a9fc8d6e54eb568a3405066e582618cc68804484
+RTCMV_SRC    := $(DEPSDIR)/rtc-mv-$(RTCMV_COMMIT)
+LIBVPX_SYS_LIBS := $(shell pkg-config --libs vpx 2>/dev/null || echo -lvpx)
+
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
 OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
@@ -378,6 +391,7 @@ endif
 # libdatachannel static, OPUS_BUILD drops opus's __imp_ prefixes.
 RTC_CMAKE_FLAGS   := $(SIZE_CFLAGS)
 RTCMA_CMAKE_FLAGS := $(SIZE_CFLAGS)
+RTCMV_CMAKE_FLAGS := $(SIZE_CFLAGS)
 # cmake --build target selection. Native builds the default (all), including
 # the shared rtc.dll/rtcma module. Those don't link under mingw (usrsctp's
 # GetAdaptersAddresses needs -liphlpapi, which isn't wired for the .dll) and
@@ -386,13 +400,16 @@ RTCMA_CMAKE_FLAGS := $(SIZE_CFLAGS)
 # clock_nanosleep(), which Darwin lacks. Both build just the static targets.
 RTC_BUILD_TARGETS   :=
 RTCMA_BUILD_TARGETS :=
+RTCMV_BUILD_TARGETS :=
 ifdef WIN
   RTC_CMAKE_FLAGS     := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
   RTCMA_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC -DOPUS_BUILD
+  RTCMV_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
 endif
 ifneq (,$(WIN)$(MACOS))
   RTC_BUILD_TARGETS   := --target rtc_tcl_static
   RTCMA_BUILD_TARGETS := --target rtcma rtcma_tcl_static
+  RTCMV_BUILD_TARGETS := --target rtcmv rtcmv_tcl_static
 endif
 
 # ==== Dependency mapping ====
@@ -481,6 +498,21 @@ ifneq (,$(filter rtcma,$(DEPS)))
   endif
   DEP_STAMPS += $(PREFIX)/.rtcma_installed
   # Same as rtc: fully static-linked, no zipfs lib entry.
+endif
+ifneq (,$(filter rtcmv,$(DEPS)))
+  # rtcmv, like rtcma, reuses rtc's vendored libdatachannel + zippy's
+  # mbedtls, so rtc must be in DEPS too.
+  ifeq (,$(filter rtc,$(DEPS)))
+    $(error rtcmv requires rtc — add rtc to DEPS)
+  endif
+  DEP_STAMPS += $(PREFIX)/.rtcmv_installed
+endif
+ifneq (,$(filter rtcmv_tk,$(DEPS)))
+  # No stamp of its own: rides rtcmv's cmake build, just changes which
+  # archives this binary's KITSH_DEP_LIBS picks up.
+  ifeq (,$(filter rtcmv,$(DEPS)))
+    $(error rtcmv_tk requires rtcmv — add rtcmv to DEPS)
+  endif
 endif
 ifneq (,$(filter omemo,$(DEPS)))
   # picomemo links libmbedcrypto and pulls mbedtls headers from zippy's
@@ -619,6 +651,19 @@ ifneq (,$(filter rtcma,$(DEPS)))
       $(RTCMA_BUILD)/librtcma.a \
       $(wildcard $(RTCMA_BUILD)/vendor/lib/libopus*.a)
 endif
+ifneq (,$(filter rtcmv,$(DEPS)))
+  RTCMV_BUILD := $(BUILDDIR)/rtcmv
+  KITSH_DEP_FLAGS += -DWITH_RTCMV
+  KITSH_DEP_LIBS  += \
+      $(RTCMV_BUILD)/tcl/librtcmv_tcl.a \
+      $(RTCMV_BUILD)/librtcmv.a \
+      $(wildcard $(RTCMV_BUILD)/vendor/lib/libvpx*.a)
+  # libvpx: bundled archive if BundleDeps produced one, else the system lib.
+endif
+ifneq (,$(filter rtcmv_tk,$(DEPS)))
+  KITSH_DEP_FLAGS += -DWITH_RTCMV_TK
+  KITSH_DEP_LIBS  += $(RTCMV_BUILD)/tcl/librtcmv_tk_tcl.a
+endif
 ifneq (,$(filter omemo,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_OMEMO
   # Built in-tree under OMEMO_BUILD — picomemo's Makefile drops the archive
@@ -651,7 +696,7 @@ ifneq (,$(filter tkdnd,$(DEPS)))
 endif
 
 # C++ link driver toggle: triggered by any libdatachannel-based dep.
-ifneq (,$(filter rtc rtcma,$(DEPS)))
+ifneq (,$(filter rtc rtcma rtcmv,$(DEPS)))
   KITSH_LD := g++
   # -xc forces g++ to treat kitsh.c as C (preserving C linkage on the
   # `extern int <Pkg>_Init(...)` decls); -xnone resets so the trailing
@@ -665,6 +710,15 @@ ifneq (,$(filter rtc rtcma,$(DEPS)))
     KITSH_EXTRA_LDFLAGS :=
   else
     KITSH_EXTRA_LDFLAGS := -static-libstdc++
+  endif
+endif
+
+# rtcmv's libvpx: the system lib when BundleDeps hasn't produced an
+# archive for the kitsh link to fold in. Appended after the C++-toggle
+# block, which reassigns KITSH_EXTRA_LDFLAGS wholesale.
+ifneq (,$(filter rtcmv,$(DEPS)))
+  ifeq (,$(wildcard $(RTCMV_BUILD)/vendor/lib/libvpx*.a))
+    KITSH_EXTRA_LDFLAGS += $(LIBVPX_SYS_LIBS)
   endif
 endif
 
@@ -761,6 +815,12 @@ endif
 ifneq (,$(filter rtcma,$(DEPS)))
   STATIC_PKGS += rtcma:Rtcma:$(RTCMA_VER)
 endif
+ifneq (,$(filter rtcmv,$(DEPS)))
+  STATIC_PKGS += rtcmv:Rtcmv:$(RTCMV_VER)
+endif
+ifneq (,$(filter rtcmv_tk,$(DEPS)))
+  STATIC_PKGS += rtcmv_tk:RtcmvTk:$(RTCMV_VER)
+endif
 ifneq (,$(filter omemo,$(DEPS)))
   STATIC_PKGS += omemo:Omemo:$(OMEMO_VER)
 endif
@@ -800,6 +860,7 @@ OPUS_PATCHES   := $(call patches-for,opus)
 MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 SQLCIPHER_PATCHES := $(call patches-for,sqlcipher)
 RTCMA_PATCHES  := $(call patches-for,rtcma)
+RTCMV_PATCHES  := $(call patches-for,rtcmv)
 
 # ==== Download ====
 # The only phase that touches the network. Everything here is content-addressed
@@ -807,7 +868,7 @@ RTCMA_PATCHES  := $(call patches-for,rtcma)
 # build needs — see ZIPPY_OFFLINE below.
 
 TAR_DEPS := TCL TK TDOM TCLLIB IMG OPUS
-GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA OMEMO TCLWUFFS TKDND SQLCIPHER LIBTOMCRYPT
+GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA RTCMV OMEMO TCLWUFFS TKDND SQLCIPHER LIBTOMCRYPT
 
 # Pristine per-pin checkout for each git dep, kept apart from the tree the build
 # uses. See git-dep below for why the two are separate.
@@ -1219,6 +1280,32 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_ins
 		-DMbedTLS_DIR=$(PREFIX)/lib/cmake/MbedTLS \
 		-DCMAKE_PREFIX_PATH='$(PREFIX);$(BUILDDIR)/rtc/vendor'
 	cmake --build $(BUILDDIR)/rtcma -j$(NPROC) $(RTCMA_BUILD_TARGETS)
+	mkdir -p $(PREFIX)
+	touch $@
+
+# Rtcmv: same shape as rtcma. libdatachannel + mbedtls come from rtc's
+# vendor tree as raw archives; libvpx is the system lib via pkg-config
+# for now (RTCMV_BUNDLE_LIBVPX stays OFF until a tarball is pinned).
+#
+# RTCMV_BUILD_TK is always on: this cmake build is shared by every binary
+# in the BASEDIR, so its config can't vary per-binary. Whether the Tk
+# archive actually gets linked is decided below, by `rtcmv_tk` in DEPS.
+$(PREFIX)/.rtcmv_installed: $(TCLSH) $(RTCMV_SRC) $(PREFIX)/.rtc_installed
+	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtcmv,$(RTCMV_SRC))
+	cmake -S $(RTCMV_SRC) -B $(BUILDDIR)/rtcmv $(CMAKE_TOOLCHAIN) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DRTCMV_CORE_ONLY=OFF \
+		-DRTCMV_BUILD_TCL=ON \
+		-DRTCMV_BUILD_TK=ON \
+		-DRTCMV_BUNDLE_LIBVPX=OFF \
+		-DRTCMV_LIBDC_LIBDIR=$(BUILDDIR)/rtc/vendor/lib \
+		-DRTCMV_LIBDC_INCLUDE=$(BUILDDIR)/rtc/vendor/include \
+		-DRTCMV_MBEDTLS_LIBDIR=$(PREFIX)/lib \
+		-DCMAKE_C_FLAGS="$(RTCMV_CMAKE_FLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(RTCMV_CMAKE_FLAGS)" \
+		-DCMAKE_PREFIX_PATH='$(PREFIX);$(BUILDDIR)/rtc/vendor'
+	cmake --build $(BUILDDIR)/rtcmv -j$(NPROC) $(RTCMV_BUILD_TARGETS)
 	mkdir -p $(PREFIX)
 	touch $@
 

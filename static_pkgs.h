@@ -32,6 +32,12 @@ extern int Rtc_Init(Tcl_Interp *);
 #ifdef WITH_RTCMA
 extern int Rtcma_Init(Tcl_Interp *);
 #endif
+#ifdef WITH_RTCMV
+extern int Rtcmv_Init(Tcl_Interp *);
+#endif
+#ifdef WITH_RTCMV_TK
+extern int Rtcmv_tk_Init(Tcl_Interp *);
+#endif
 #ifdef WITH_OMEMO
 extern int Omemo_Init(Tcl_Interp *);
 #endif
@@ -135,6 +141,12 @@ static inline void Zippy_RegisterStaticPackages(Tcl_Interp *interp) {
 #endif
 #ifdef WITH_RTCMA
     Tcl_StaticPackage(interp, "Rtcma", Rtcma_Init, NULL);
+#endif
+#ifdef WITH_RTCMV
+    Tcl_StaticPackage(interp, "Rtcmv", Rtcmv_Init, NULL);
+#endif
+#ifdef WITH_RTCMV_TK
+    Tcl_StaticPackage(interp, "RtcmvTk", Rtcmv_tk_Init, NULL);
 #endif
 #ifdef WITH_OMEMO
     Tcl_StaticPackage(interp, "Omemo", Omemo_Init, NULL);
