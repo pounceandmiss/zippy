@@ -250,13 +250,20 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 # RFC3550/7741 framing + a shared-memory frame ring) with its own Tcl 9
 # binding. Like rtcma it consumes libdatachannel from rtc's vendor prefix
 # and mbedtls from zippy's shared install, so `rtc` must also be in DEPS.
-# libvpx: bundled once BundleDeps.cmake pins a verified tarball; for now
-# the recipe below uses the system libvpx via pkg-config and the launcher
-# link adds -lvpx (see LIBVPX_SYS_LIBS).
 RTCMV_VER    := 0.1.0
 RTCMV_REPO   := https://codeberg.org/another-im/rtc-mv.git
 RTCMV_COMMIT := a9fc8d6e54eb568a3405066e582618cc68804484
 RTCMV_SRC    := $(DEPSDIR)/rtc-mv-$(RTCMV_COMMIT)
+
+# Bundled like opus: a sandboxed build (Flatpak) has no system libvpx and no
+# network, so this fetches/builds from source like every other dep here
+# rather than relying on pkg-config. LIBVPX_SYS_LIBS is a fallback only -
+# the KITSH link uses it when no bundled archive was actually produced.
+LIBVPX_VER    := 1.15.2
+LIBVPX_TAR    := libvpx-$(LIBVPX_VER).tar.gz
+LIBVPX_URL    := https://github.com/webmproject/libvpx/archive/refs/tags/v$(LIBVPX_VER).tar.gz
+LIBVPX_SHA256 := 26fcd3db88045dee380e581862a6ef106f49b74b6396ee95c2993a260b4636aa
+LIBVPX_SRC    := $(DEPSDIR)/libvpx-$(LIBVPX_VER)
 LIBVPX_SYS_LIBS := $(shell pkg-config --libs vpx 2>/dev/null || echo -lvpx)
 
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
@@ -857,6 +864,7 @@ TCLLIB_PATCHES := $(call patches-for,tcllib)
 TDOM_PATCHES   := $(call patches-for,tdom)
 IMG_PATCHES    := $(call patches-for,img)
 OPUS_PATCHES   := $(call patches-for,opus)
+LIBVPX_PATCHES := $(call patches-for,libvpx)
 MBEDTLS_PATCHES := $(call patches-for,mbedtls)
 SQLCIPHER_PATCHES := $(call patches-for,sqlcipher)
 RTCMA_PATCHES  := $(call patches-for,rtcma)
@@ -867,7 +875,7 @@ RTCMV_PATCHES  := $(call patches-for,rtcmv)
 # (sha256 per tarball, commit per git dep), so a populated DEPSDIR is all a
 # build needs — see ZIPPY_OFFLINE below.
 
-TAR_DEPS := TCL TK TDOM TCLLIB IMG OPUS
+TAR_DEPS := TCL TK TDOM TCLLIB IMG OPUS LIBVPX
 GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA RTCMV OMEMO TCLWUFFS TKDND SQLCIPHER LIBTOMCRYPT
 
 # Pristine per-pin checkout for each git dep, kept apart from the tree the build
@@ -1064,6 +1072,12 @@ $(OPUS_SRC): $(DEPSDIR)/$(OPUS_TAR) $(OPUS_PATCHES)
 	rm -rf $@
 	tar xzf $< -C $(DEPSDIR)
 	$(call apply-patches,$@,$(OPUS_PATCHES))
+	touch $@
+
+$(LIBVPX_SRC): $(DEPSDIR)/$(LIBVPX_TAR) $(LIBVPX_PATCHES)
+	rm -rf $@
+	tar xzf $< -C $(DEPSDIR)
+	$(call apply-patches,$@,$(LIBVPX_PATCHES))
 	touch $@
 
 # ==== Build Tcl/Tk ====
@@ -1290,7 +1304,7 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_ins
 # RTCMV_BUILD_TK is always on: this cmake build is shared by every binary
 # in the BASEDIR, so its config can't vary per-binary. Whether the Tk
 # archive actually gets linked is decided below, by `rtcmv_tk` in DEPS.
-$(PREFIX)/.rtcmv_installed: $(TCLSH) $(RTCMV_SRC) $(PREFIX)/.rtc_installed
+$(PREFIX)/.rtcmv_installed: $(TCLSH) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
 	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtcmv,$(RTCMV_SRC))
 	cmake -S $(RTCMV_SRC) -B $(BUILDDIR)/rtcmv $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
@@ -1298,7 +1312,8 @@ $(PREFIX)/.rtcmv_installed: $(TCLSH) $(RTCMV_SRC) $(PREFIX)/.rtc_installed
 		-DRTCMV_CORE_ONLY=OFF \
 		-DRTCMV_BUILD_TCL=ON \
 		-DRTCMV_BUILD_TK=ON \
-		-DRTCMV_BUNDLE_LIBVPX=OFF \
+		-DRTCMV_BUNDLE_LIBVPX=ON \
+		-DRTCMV_LIBVPX_SOURCE_DIR=$(LIBVPX_SRC) \
 		-DRTCMV_LIBDC_LIBDIR=$(BUILDDIR)/rtc/vendor/lib \
 		-DRTCMV_LIBDC_INCLUDE=$(BUILDDIR)/rtc/vendor/include \
 		-DRTCMV_MBEDTLS_LIBDIR=$(PREFIX)/lib \
