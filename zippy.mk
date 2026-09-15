@@ -252,7 +252,7 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 # and mbedtls from zippy's shared install, so `rtc` must also be in DEPS.
 RTCMV_VER    := 0.1.0
 RTCMV_REPO   := https://codeberg.org/another-im/rtc-mv.git
-RTCMV_COMMIT := a9fc8d6e54eb568a3405066e582618cc68804484
+RTCMV_COMMIT := 36fe05abfe125a486ef99a1ab7531f98eafd6f31
 RTCMV_SRC    := $(DEPSDIR)/rtc-mv-$(RTCMV_COMMIT)
 
 # Bundled like opus: a sandboxed build (Flatpak) has no system libvpx and no
