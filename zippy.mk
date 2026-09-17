@@ -252,7 +252,7 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 # and mbedtls from zippy's shared install, so `rtc` must also be in DEPS.
 RTCMV_VER    := 0.1.0
 RTCMV_REPO   := https://codeberg.org/another-im/rtc-mv.git
-RTCMV_COMMIT := 86b0e42c66bc89d8324b66728e11e42d1551d1d8
+RTCMV_COMMIT := b87679da1279ecee71dc107151d0ff5edba7be5b
 RTCMV_SRC    := $(DEPSDIR)/rtc-mv-$(RTCMV_COMMIT)
 
 # Bundled like opus: a sandboxed build (Flatpak) has no system libvpx and no
@@ -412,6 +412,8 @@ ifdef WIN
   RTC_CMAKE_FLAGS     := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
   RTCMA_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC -DOPUS_BUILD
   RTCMV_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
+  RTCMV_BUILD_TK      := OFF
+  RTCMV_VPX_FLAGS     := -DRTCMV_LIBVPX_TARGET=x86_64-win64-gcc '-DRTCMV_LIBVPX_ENV=CROSS=$(CROSS)-'
 endif
 ifneq (,$(WIN)$(MACOS))
   RTC_BUILD_TARGETS   := --target rtc_tcl_static
@@ -1291,10 +1293,10 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_ins
 # Rtcmv: same shape as rtcma. libdatachannel + mbedtls come from rtc's
 # vendor tree as raw archives; libvpx is built from LIBVPX_SRC.
 #
-# RTCMV_BUILD_TK is on except on Android: this cmake build is shared by every binary
-# in the BASEDIR, so its config can't vary per-binary. Whether the Tk
-# archive actually gets linked is decided below, by `rtcmv_tk` in DEPS.
-$(PREFIX)/.rtcmv_installed: $(TCLSH) $(if $(ANDROID),,$(WISH)) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
+# RTCMV_BUILD_TK is on except on Android and Windows: this cmake build is shared
+# by every binary in the BASEDIR, so its config can't vary per-binary. Whether
+# the Tk archive actually gets linked is decided below, by `rtcmv_tk` in DEPS.
+$(PREFIX)/.rtcmv_installed: $(TCLSH) $(if $(ANDROID)$(WIN),,$(WISH)) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
 	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtcmv,$(RTCMV_SRC))
 	cmake -S $(RTCMV_SRC) -B $(BUILDDIR)/rtcmv $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
