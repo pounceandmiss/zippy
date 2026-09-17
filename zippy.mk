@@ -252,19 +252,17 @@ OPUS_SRC    := $(DEPSDIR)/opus-$(OPUS_VER)
 # and mbedtls from zippy's shared install, so `rtc` must also be in DEPS.
 RTCMV_VER    := 0.1.0
 RTCMV_REPO   := https://codeberg.org/another-im/rtc-mv.git
-RTCMV_COMMIT := e4495b124b6f9c934a8fbaf1dd8e1c80b65caaab
+RTCMV_COMMIT := 86b0e42c66bc89d8324b66728e11e42d1551d1d8
 RTCMV_SRC    := $(DEPSDIR)/rtc-mv-$(RTCMV_COMMIT)
 
 # Bundled like opus: a sandboxed build (Flatpak) has no system libvpx and no
 # network, so this fetches/builds from source like every other dep here
-# rather than relying on pkg-config. LIBVPX_SYS_LIBS is a fallback only -
-# the KITSH link uses it when no bundled archive was actually produced.
+# rather than relying on pkg-config.
 LIBVPX_VER    := 1.15.2
 LIBVPX_TAR    := libvpx-$(LIBVPX_VER).tar.gz
 LIBVPX_URL    := https://github.com/webmproject/libvpx/archive/refs/tags/v$(LIBVPX_VER).tar.gz
 LIBVPX_SHA256 := 26fcd3db88045dee380e581862a6ef106f49b74b6396ee95c2993a260b4636aa
 LIBVPX_SRC    := $(DEPSDIR)/libvpx-$(LIBVPX_VER)
-LIBVPX_SYS_LIBS := $(shell pkg-config --libs vpx 2>/dev/null || echo -lvpx)
 
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
@@ -408,6 +406,8 @@ RTCMV_CMAKE_FLAGS := $(SIZE_CFLAGS)
 RTC_BUILD_TARGETS   :=
 RTCMA_BUILD_TARGETS :=
 RTCMV_BUILD_TARGETS :=
+RTCMV_BUILD_TK      := ON
+RTCMV_VPX_FLAGS     :=
 ifdef WIN
   RTC_CMAKE_FLAGS     := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC
   RTCMA_CMAKE_FLAGS   := $(SIZE_CFLAGS) -DSTATIC_BUILD -DRTC_STATIC -DOPUS_BUILD
@@ -664,8 +664,8 @@ ifneq (,$(filter rtcmv,$(DEPS)))
   KITSH_DEP_LIBS  += \
       $(RTCMV_BUILD)/tcl/librtcmv_tcl.a \
       $(RTCMV_BUILD)/librtcmv.a \
-      $(wildcard $(RTCMV_BUILD)/vendor/lib/libvpx*.a)
-  # libvpx: bundled archive if BundleDeps produced one, else the system lib.
+      $(RTCMV_BUILD)/vendor/lib/libvpx.a
+  # Named, not globbed: make caches the directory from before libvpx is built.
 endif
 ifneq (,$(filter rtcmv_tk,$(DEPS)))
   KITSH_DEP_FLAGS += -DWITH_RTCMV_TK
@@ -717,15 +717,6 @@ ifneq (,$(filter rtc rtcma rtcmv,$(DEPS)))
     KITSH_EXTRA_LDFLAGS :=
   else
     KITSH_EXTRA_LDFLAGS := -static-libstdc++
-  endif
-endif
-
-# rtcmv's libvpx: the system lib when BundleDeps hasn't produced an
-# archive for the kitsh link to fold in. Appended after the C++-toggle
-# block, which reassigns KITSH_EXTRA_LDFLAGS wholesale.
-ifneq (,$(filter rtcmv,$(DEPS)))
-  ifeq (,$(wildcard $(RTCMV_BUILD)/vendor/lib/libvpx*.a))
-    KITSH_EXTRA_LDFLAGS += $(LIBVPX_SYS_LIBS)
   endif
 endif
 
@@ -1298,22 +1289,22 @@ $(PREFIX)/.rtcma_installed: $(TCLSH) $(RTCMA_SRC) $(OPUS_SRC) $(PREFIX)/.rtc_ins
 	touch $@
 
 # Rtcmv: same shape as rtcma. libdatachannel + mbedtls come from rtc's
-# vendor tree as raw archives; libvpx is the system lib via pkg-config
-# for now (RTCMV_BUNDLE_LIBVPX stays OFF until a tarball is pinned).
+# vendor tree as raw archives; libvpx is built from LIBVPX_SRC.
 #
-# RTCMV_BUILD_TK is always on: this cmake build is shared by every binary
+# RTCMV_BUILD_TK is on except on Android: this cmake build is shared by every binary
 # in the BASEDIR, so its config can't vary per-binary. Whether the Tk
 # archive actually gets linked is decided below, by `rtcmv_tk` in DEPS.
-$(PREFIX)/.rtcmv_installed: $(TCLSH) $(WISH) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
+$(PREFIX)/.rtcmv_installed: $(TCLSH) $(if $(ANDROID),,$(WISH)) $(RTCMV_SRC) $(LIBVPX_SRC) $(PREFIX)/.rtc_installed
 	@$(call drop-moved-cmake-cache,$(BUILDDIR)/rtcmv,$(RTCMV_SRC))
 	cmake -S $(RTCMV_SRC) -B $(BUILDDIR)/rtcmv $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-DRTCMV_CORE_ONLY=OFF \
 		-DRTCMV_BUILD_TCL=ON \
-		-DRTCMV_BUILD_TK=ON \
+		-DRTCMV_BUILD_TK=$(RTCMV_BUILD_TK) \
 		-DRTCMV_BUNDLE_LIBVPX=ON \
 		-DRTCMV_LIBVPX_SOURCE_DIR=$(LIBVPX_SRC) \
+		$(RTCMV_VPX_FLAGS) \
 		-DRTCMV_LIBDC_LIBDIR=$(BUILDDIR)/rtc/vendor/lib \
 		-DRTCMV_LIBDC_INCLUDE=$(BUILDDIR)/rtc/vendor/include \
 		-DRTCMV_MBEDTLS_LIBDIR=$(PREFIX)/lib \

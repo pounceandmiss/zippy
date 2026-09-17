@@ -113,12 +113,17 @@ $(PREFIX)/.mtls_installed: $(MTLS_SRC) $(TCLSH) $(PREFIX)/.mbedtls_installed
 		$(MAKE) install TCLSH_PROG=$(HOST_TCLSH)
 	touch $@
 
-# ==== rtc/rtcma (shared cmake recipe + the NDK toolchain via CMAKE_TOOLCHAIN) ====
+# ==== rtc/rtcma/rtcmv (shared cmake recipe + the NDK toolchain via CMAKE_TOOLCHAIN) ====
 # Build only the static archives the kit links, as windows.mk does; the default
 # also builds shared rtc/rtcma modules that aren't needed. The native cmake C
 # flags ($(SIZE_CFLAGS)) carry over - no Windows STATIC_BUILD/dllimport defines.
 RTC_BUILD_TARGETS   := --target rtc_tcl_static
 RTCMA_BUILD_TARGETS := --target rtcma rtcma_tcl_static
+RTCMV_BUILD_TARGETS := --target rtcmv rtcmv_tcl_static
+RTCMV_BUILD_TK      := OFF
+# libvpx's configure takes the NDK tools by name; AS must end in clang.
+RTCMV_VPX_FLAGS := -DRTCMV_LIBVPX_TARGET=arm64-android-gcc \
+	'-DRTCMV_LIBVPX_ENV=CC=$(ANDROID_CC);CXX=$(ANDROID_CXX);AS=$(ANDROID_CC);LD=$(ANDROID_CC);AR=$(ANDROID_AR);NM=llvm-nm;STRIP=llvm-strip'
 
 # ==== omemo / tclwuffs (own Makefiles) ====
 # In-place builds (the docker cache keeps DEPSDIR android-only) with the NDK
