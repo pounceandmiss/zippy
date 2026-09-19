@@ -182,11 +182,7 @@ MTLS_VER   := 1.2.0
 TCL_BVER   := 9.0
 TK_BVER    := 9.0
 
-# Fork of chpock/tclmtls: tracks upstream plus a POSIX fix to configure (== -> =)
-# so the Tcl 9 build detection works under dash (/bin/sh on Debian/Ubuntu/Termux,
-# i.e. the docker toolchains); without it mtls silently builds as Tcl 8 and SEGVs
-# in a Tcl 9 interp. Drop the fork once that fix lands upstream.
-MTLS_COMMIT := 0d4055aa3f9bb5ef827e2ee76281102f54c7eca0
+MTLS_COMMIT := a31a5c08ca0630101d1235e561045f7f7c57e6ce
 
 THREAD_VER  := 3.0.4
 SQLITE3_VER := 3.51.0
@@ -326,7 +322,7 @@ TCL_URL    := http://prdownloads.sourceforge.net/tcl/$(TCL_TAR)
 TK_URL     := http://prdownloads.sourceforge.net/tcl/$(TK_TAR)
 TDOM_URL   := https://tdom.org/downloads/latest-src.tar.gz
 TCLLIB_URL := https://core.tcl-lang.org/tcllib/uv/$(TCLLIB_TAR)
-MTLS_REPO  := https://github.com/pounceandmiss/tclmtls.git
+MTLS_REPO  := https://github.com/chpock/tclmtls.git
 MTLS_SRC   := $(DEPSDIR)/tclmtls-$(MTLS_COMMIT)
 IMG_URL    := https://sourceforge.net/projects/tkimg/files/tkimg/2.1/tkimg%202.1.1/$(IMG_TAR)/download
 
