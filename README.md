@@ -269,6 +269,54 @@ only shape the APK packager ships into `nativeLibraryDir`), plus
 `libc++_shared.so` when C++ deps (`rtc`/`rtcma`) are linked — arm64-v8a has no
 static libstdc++.
 
+## Emscripten (cross-build)
+
+`TARGET_OS=emscripten` compiles Tcl and the deps to WebAssembly with `emcc`,
+for a browser (a Web Worker, typically) or node.
+
+In docker, which needs nothing else installed:
+
+```
+zippy/in_docker.sh emsdk make -f zippy.mk TARGET_OS=emscripten \
+    DEPS="..." BASEDIR=/src/build/wasm-docker HOST_TCLSH=/usr/local/bin/tclsh9.0 \
+    IN_DOCKER_BUILD_SUBDIR= lib
+```
+
+On the host, which needs `emcc`/`emar` on PATH, a host `tclsh9.0` to bundle the
+scripts (`HOST_TCLSH=...`, else zippy builds its own) and `node` for the tests:
+
+```
+make -f zippy.mk TARGET_OS=emscripten DEPS="..." tclsh    # -> ./tclsh.mjs + ./tclsh.wasm
+make -f zippy.mk TARGET_OS=emscripten BIN_NAME=myapp ... app   # -> ./myapp.mjs + .wasm
+make -f zippy.mk TARGET_OS=emscripten ... lib                  # -> lib<name>.a, a wasm archive
+make -f zippy.mk TARGET_OS=emscripten DEPS="..." emscripten-test emscripten-opfs-test
+```
+
+Deps ported: `tdom`, `tcllib`, `omemo` and `sqlite3`.
+
+The launcher is an ES module exporting a factory (`createTclsh`, or
+`create<BIN_NAME>`), with `zippy_eval`/`zippy_result` to drive the interpreter
+from JavaScript. Call in with `ccall(..., {async: true})`: a `vwait` suspends
+through Asyncify rather than blocking the thread. A project linking the archive
+itself should `include zippy/emscripten/link.mk` for the flags and add its own
+`-sEXPORT_NAME`/`-sEXPORTED_FUNCTIONS`; its shim calls `TclEm_InstallNotifier()`
+before the first `Tcl_CreateInterp`, and mounts the script zip through
+`_binary_scripts_zip_{start,len}` (no `_end` on this target).
+
+### What a page has instead
+
+`::wschan` (`Wschan_Init`) is the only network a page has, `::httpx`
+(`Httpx_Init`) replaces the `http` package with the browser's own stack, and
+the `opfs` SQLite VFS (`Opfsvfs_Init`, with `emscripten/opfs-pool.js`) puts
+databases on the Origin Private File System rather than in a store that dies
+with the tab. A launcher built here has all three; a project linking
+`lib<name>.a` calls their `_Init` from its own shim.
+
+JavaScript cannot call into a suspended interpreter, so nothing is pushed: a
+handler parks its event in a queue and Tcl drains it from a timer, on its own
+stack (`emscripten/emqueue.c`). Hence no `fileevent`, and no threads or
+processes, though `package require Thread` succeeds against Emscripten's stubs.
+
 ## Docker toolchains
 
 `in_docker.sh <profile> <command...>` runs a build inside a pinned toolchain
@@ -283,7 +331,7 @@ zippy/in_docker.sh linux-glibc2.36 bash    # interactive toolchain shell
 
 Profiles map to `docker/<profile>.Dockerfile`: `linux-glibc2.36` (native Linux
 build against an old glibc, for portable binaries), `mingw` (Windows cross),
-`ndk` (Android).
+`ndk` (Android), `emsdk` (Emscripten).
 
 A tree belongs to one toolchain: objects a container built must not be reused by
 a host-native build of the same target. Two ways to get that:

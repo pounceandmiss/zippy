@@ -106,6 +106,20 @@ else ifeq ($(TARGET_OS),android)
   BUILDDIR     := $(BASEDIR)/_build-android
   STATIC_LIBSTDCXX := 0
   CMAKE_TOOLCHAIN := -DCMAKE_TOOLCHAIN_FILE=$(ZIPPYDIR)/android-toolchain.cmake
+else ifeq ($(TARGET_OS),emscripten)
+  # wasm32 for the browser (and node). The toolchain is emcc/emar and the
+  # target is single-threaded: no -pthread, so no SharedArrayBuffer and no
+  # COOP/COEP headers on the page that loads it. The recipes and the launcher
+  # live in emscripten.mk; EMSCRIPTEN_ROOT is resolved here because the shared
+  # cmake recipes read CMAKE_TOOLCHAIN at parse time.
+  EMSCRIPTEN   := 1
+  CROSS_OVERLAY := 1
+  CROSS        := wasm32-unknown-emscripten
+  CROSS_BUILD  := x86_64-pc-linux-gnu
+  EXE_EXT      := .mjs
+  BUILDDIR     := $(BASEDIR)/_build-emscripten
+  EMSCRIPTEN_ROOT ?= $(shell em-config EMSCRIPTEN_ROOT 2>/dev/null || dirname "$$(command -v emcc)")
+  CMAKE_TOOLCHAIN := -DCMAKE_TOOLCHAIN_FILE=$(EMSCRIPTEN_ROOT)/cmake/Modules/Platform/Emscripten.cmake
 else ifeq ($(TARGET_OS),macos)
   # Shares _build with the Linux native build: only one of the two can be the
   # host, so they never collide in one checkout.
@@ -338,7 +352,7 @@ TDOM_SRC   := $(DEPSDIR)/tdom-$(TDOM_VER)-src
 # KITSH_DEP_LIBS paths below are byte-identical to before.
 OMEMO_BUILD    := $(OMEMO_SRC)
 TCLWUFFS_BUILD := $(TCLWUFFS_SRC)
-ifdef WIN
+ifneq (,$(WIN)$(EMSCRIPTEN))
   OMEMO_BUILD    := $(BUILDDIR)/omemo
   TCLWUFFS_BUILD := $(BUILDDIR)/tclwuffs
 endif
@@ -352,6 +366,11 @@ ifdef WIN
   # gate ordering (headers/stubs/archives present before deps link).
   TCLSH := $(PREFIX)/.tcl_win_installed
   WISH  := $(PREFIX)/.tk_win_installed
+endif
+ifdef EMSCRIPTEN
+  # The wasm tclsh Tcl's own build emits is JavaScript with the zipfs image
+  # appended, which nothing runs; libtcl9.0.a is the product. A stamp marks it.
+  TCLSH := $(PREFIX)/.tcl_em_installed
 endif
 
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
@@ -1512,10 +1531,12 @@ ifdef MACOS
 $(SCRIPTS_OBJ): $(SCRIPTS_ZIP)
 	printf '.section __TEXT,__const\n.p2align 4\n.globl __binary_scripts_zip_start\n__binary_scripts_zip_start:\n.incbin "%s"\n.globl __binary_scripts_zip_end\n__binary_scripts_zip_end:\n' "$(<F)" > $(@D)/scripts_blob.s
 	cd $(@D) && $(KIT_CC) -c scripts_blob.s -o $(@F)
-else
+else ifndef EMSCRIPTEN
 # Park the zip in .rodata (demand-paged, read-only). `ld -b binary` names its
 # symbols after the *input filename*, so run it from $(@D) with a bare name to
 # get _binary_scripts_zip_{start,end,size}. objcopy moves .data -> .rodata.
+# (wasm-ld has no -b binary and clang's wasm assembler no .incbin; the
+# emscripten overlay generates a C array instead - see emscripten.mk.)
 $(SCRIPTS_OBJ): $(SCRIPTS_ZIP)
 	cd $(@D) && $(KIT_LD) -r -b binary -o $(@F) $(<F)
 	$(KIT_OBJCOPY) --rename-section .data=.rodata,alloc,load,readonly,data,contents $@
@@ -1544,13 +1565,16 @@ $(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(DEP_STAMPS)
 	libtool -static -no_warning_for_no_symbols -o $@ \
 	    $(SHIM_OBJ) $(SCRIPTS_OBJ) $(KITSH_TCL_LIBS)
 else
-$(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(DEP_STAMPS)
+# LIB_EXTRA_OBJS: further objects an overlay folds in (the emscripten notifier).
+LIB_EXTRA_OBJS ?=
+$(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(LIB_EXTRA_OBJS) $(DEP_STAMPS)
 	@[ -n "$(strip $(LIB_SHIM_SRC))" ] || \
 	    { echo "the 'lib' target needs LIB_SHIM_SRC set to the project's shim .c" >&2; exit 1; }
 	rm -f $@
 	{ echo 'create $@'; \
 	  echo 'addmod $(SHIM_OBJ)'; \
 	  echo 'addmod $(SCRIPTS_OBJ)'; \
+	  $(foreach o,$(LIB_EXTRA_OBJS),echo 'addmod $(o)';) \
 	  $(foreach a,$(KITSH_TCL_LIBS),echo 'addlib $(a)';) \
 	  echo 'save'; echo 'end'; } | $(KIT_AR) -M
 endif
@@ -1590,4 +1614,12 @@ endif
 # overrides for a bionic ELF. Included last so its KITSH_* assignments win.
 ifdef ANDROID
 include $(ZIPPYDIR)/android.mk
+endif
+
+# ==== Emscripten cross-build ====
+# Tcl + TEA recipes (unix/, --host=wasm32-unknown-emscripten) built in private
+# copies under $(BUILDDIR), the wasm launcher, and the `lib` retarget. Included
+# last so its KITSH_* assignments win.
+ifdef EMSCRIPTEN
+include $(ZIPPYDIR)/emscripten.mk
 endif
