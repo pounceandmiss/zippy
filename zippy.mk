@@ -277,7 +277,7 @@ LIBVPX_SRC    := $(DEPSDIR)/libvpx-$(LIBVPX_VER)
 # Omemo (picomemo-tcl). Tcl 9 binding for picomemo.
 OMEMO_VER    := 0.3.0
 OMEMO_REPO   := https://github.com/pounceandmiss/picomemo-tcl.git
-OMEMO_COMMIT := 254ce9899878a159a8a5bcce575b6ab7437177b5
+OMEMO_COMMIT := 0b26ce3f64d042ff94b58ea1aea9baa145852403
 OMEMO_SRC    := $(DEPSDIR)/picomemo-tcl-$(OMEMO_COMMIT)
 
 # Tclwuffs. Memory-safe image decode/encode/resize on wuffs+stb. Two tiers:
@@ -744,6 +744,11 @@ KITSH_TK_LIBS  = $(KITSH_BUNDLED_LIBS) $(KITSH_DEP_LIBS) \
     $(PREFIX)/lib/libtkstub.a $(PREFIX)/lib/libtclstub.a
 KITSH_CFLAGS      := -I$(PREFIX)/include
 KITSH_SYSLIBS     := -lpthread -ldl -lz -lm
+# Haiku folds pthread/dl/libm into libroot (there is no libdl to name), and its
+# BSD sockets live in libnetwork.
+ifeq ($(shell uname -s),Haiku)
+  KITSH_SYSLIBS := -lnetwork -lz
+endif
 ifdef MACOS
   # CoreFoundation is not Tk-only: Tcl's own notifier (CFRunLoop) and bundle
   # loader need it, so tclsh links it too. Matches TCL_LIBS in tclConfig.sh.
