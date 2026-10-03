@@ -405,6 +405,14 @@ ifdef SOURCE_DATE_EPOCH
   SIZE_CFLAGS += $(REPRO_CFLAGS)
 endif
 
+# ==== Position-independent code ====
+# -fPIC for every dep, so the archives link into a PIE or a .so regardless of
+# the compiler's default (Haiku's gcc doesn't default to PIE). Added outside the
+# GC_SECTIONS switch. Not on Windows (no PIC on PE) or Emscripten (-fPIC means
+# dynamic linking there).
+PIC_CFLAGS  := $(if $(WIN)$(EMSCRIPTEN),,-fPIC)
+SIZE_CFLAGS += $(PIC_CFLAGS)
+
 # Per-dep cmake C/C++ flag strings. Identical to SIZE_CFLAGS natively (so the
 # native cmake command is unchanged); the Windows static link needs extra
 # defines: STATIC_BUILD drops dllimport decoration, RTC_STATIC builds
@@ -534,6 +542,9 @@ endif
 ifneq (,$(filter rtcmv_tk,$(DEPS)))
   # No stamp of its own: rides rtcmv's cmake build, just changes which
   # archives this binary's KITSH_DEP_LIBS picks up.
+  ifeq ($(SHELL_TYPE),tclsh)
+    $(error rtcmv_tk requires Tk; cannot be used with SHELL_TYPE=tclsh)
+  endif
   ifeq (,$(filter rtcmv,$(DEPS)))
     $(error rtcmv_tk requires rtcmv — add rtcmv to DEPS)
   endif
@@ -867,7 +878,14 @@ endif
 # prerequisites of the extract rule, so a changed patch forces a clean
 # re-extract (rm -rf): patching over an existing tree leaves stale .o files
 # whose struct layouts no longer match the patched headers.
-patches-for    = $(sort $(wildcard $(PATCHES_DIR)/$(1)/*.patch))
+#
+# zippy's own build fixes live in $(ZIPPYDIR)/patches/<tree>/ and apply first;
+# a project patch with the same file name is skipped.
+ZIPPY_PATCHES_DIR := $(ZIPPYDIR)/patches
+_zippy-patches = $(sort $(wildcard $(ZIPPY_PATCHES_DIR)/$(1)/*.patch))
+patches-for    = $(_zippy-patches) \
+                 $(filter-out $(addprefix $(PATCHES_DIR)/$(1)/,$(notdir $(_zippy-patches))), \
+                     $(sort $(wildcard $(PATCHES_DIR)/$(1)/*.patch)))
 # $(call apply-patches,<tree-dir>,<patch-list>)
 apply-patches  = $(foreach p,$(2),patch -d $(1) -p1 < $(p) &&) true
 
@@ -895,8 +913,33 @@ GIT_DEPS := MTLS MBEDTLS RTC LIBDC RTCMA RTCMV OMEMO TCLWUFFS TKDND SQLCIPHER LI
 # uses. See git-dep below for why the two are separate.
 $(foreach d,$(GIT_DEPS),$(eval $(d)_GIT := $$(DEPSDIR)/git/$$(notdir $$($(d)_SRC))))
 
-DEPS_TARBALLS := $(foreach d,$(TAR_DEPS),$(DEPSDIR)/$($(d)_TAR))
-DEPS_GIT      := $(foreach d,$(GIT_DEPS),$($(d)_GIT))
+# Sources needed by DEPS, for download, dep-bundle and flatpak-sources (a build
+# fetches through the stamp prerequisites instead). Keep in sync with those.
+# ALL_DEPS=1 lists every pinned source.
+NEED_SRC_tdom     := TDOM
+NEED_SRC_tcllib   := TCLLIB
+NEED_SRC_mtls     := MTLS MBEDTLS
+NEED_SRC_img      := IMG TK
+NEED_SRC_rtc      := RTC LIBDC MBEDTLS
+NEED_SRC_rtcma    := RTCMA OPUS
+NEED_SRC_rtcmv    := RTCMV LIBVPX $(if $(ANDROID)$(WIN),,TK)
+NEED_SRC_rtcmv_tk := TK
+NEED_SRC_omemo    := OMEMO MBEDTLS
+NEED_SRC_tclwuffs := TCLWUFFS
+NEED_SRC_tkwuffs  := TK
+NEED_SRC_tkdnd    := TKDND TK
+ifeq ($(ALL_DEPS),1)
+  NEEDED_TAR_DEPS := $(TAR_DEPS)
+  NEEDED_GIT_DEPS := $(GIT_DEPS)
+else
+  _NEEDED_SRC := TCL SQLCIPHER LIBTOMCRYPT $(if $(filter wish,$(SHELL_TYPE)),TK) \
+                 $(foreach d,$(DEPS),$(NEED_SRC_$(d)))
+  NEEDED_TAR_DEPS := $(filter $(_NEEDED_SRC),$(TAR_DEPS))
+  NEEDED_GIT_DEPS := $(filter $(_NEEDED_SRC),$(GIT_DEPS))
+endif
+
+DEPS_TARBALLS := $(foreach d,$(NEEDED_TAR_DEPS),$(DEPSDIR)/$($(d)_TAR))
+DEPS_GIT      := $(foreach d,$(NEEDED_GIT_DEPS),$($(d)_GIT))
 
 # ZIPPY_OFFLINE=1 replaces every network recipe with one that names the missing
 # dep and exits, instead of failing later as a curl/git error.
@@ -978,12 +1021,12 @@ $(foreach d,$(GIT_DEPS),$(eval $(call git-dep,$(d))))
 download: $(DEPS_TARBALLS) $(DEPS_GIT)
 
 # ==== Dep bundle ====
-# One archive of every pinned source: unpack into DEPSDIR and build with
-# ZIPPY_OFFLINE=1. Sources are platform-neutral, so one bundle serves every
-# target sharing a DEPSDIR. Named by a digest of the pins, so a bump names a
-# different bundle.
-DEPS_PINS      := $(foreach d,$(TAR_DEPS),$(d)=$($(d)_SHA256)) \
-                  $(foreach d,$(GIT_DEPS),$(d)=$($(d)_COMMIT))
+# One archive of the pinned sources DEPS needs (all of them with ALL_DEPS=1):
+# unpack into DEPSDIR and build with ZIPPY_OFFLINE=1. Sources are
+# platform-neutral, so one bundle serves every target sharing a DEPSDIR. Named
+# by a digest of its pins, so a bump names a different bundle.
+DEPS_PINS      := $(foreach d,$(NEEDED_TAR_DEPS),$(d)=$($(d)_SHA256)) \
+                  $(foreach d,$(NEEDED_GIT_DEPS),$(d)=$($(d)_COMMIT))
 DEPS_BUNDLE_ID := $(shell printf '%s\n' "$(DEPS_PINS)" | $(SHA256SUM) | cut -c1-12)
 DEPS_BUNDLE_EXT  := $(shell command -v zstd >/dev/null 2>&1 && echo tar.zst || echo tar.gz)
 DEPS_BUNDLE_COMP := $(if $(filter tar.zst,$(DEPS_BUNDLE_EXT)),--zstd,-z)
@@ -997,7 +1040,8 @@ DEPS_BUNDLE_TAR_EXCLUDE := $(if $(DEPS_BUNDLE_EXCLUDE_VCS),--exclude=.git,)
 
 dep-bundle: download
 	tar $(DEPS_BUNDLE_COMP) $(DEPS_BUNDLE_TAR_EXCLUDE) -cf $(DEPS_BUNDLE) \
-	    -C $(DEPSDIR) $(foreach d,$(TAR_DEPS),$($(d)_TAR)) git
+	    -C $(DEPSDIR) $(foreach d,$(NEEDED_TAR_DEPS),$($(d)_TAR)) \
+	    $(foreach d,$(NEEDED_GIT_DEPS),git/$(notdir $($(d)_GIT)))
 	$(SHA256SUM) $(DEPS_BUNDLE)
 
 unpack-deps:
@@ -1008,9 +1052,9 @@ unpack-deps:
 
 # ==== Flatpak sources ====
 # Emit the pin table as a flatpak `sources:` list, so the pins are not hand-synced
-# into the manifest.
+# into the manifest. Pass the module's DEPS and SHELL_TYPE, or ALL_DEPS=1.
 #
-#   make -f zippy.mk flatpak-sources FLATPAK_DEPS_DIR=build/deps
+#   make -f zippy.mk flatpak-sources FLATPAK_DEPS_DIR=build/deps DEPS="..."
 #
 # Paste the output into the module's `sources:` block (already indented for it).
 # Each git dep lands at the pristine path git-dep copies from, so the build finds
@@ -1018,13 +1062,13 @@ unpack-deps:
 FLATPAK_DEPS_DIR ?= _build/deps
 
 flatpak-sources:
-	@$(foreach d,$(TAR_DEPS), \
+	@$(foreach d,$(NEEDED_TAR_DEPS), \
 	    printf '      - type: file\n'                             ; \
 	    printf '        url: %s\n'            '$($(d)_URL)'       ; \
 	    printf '        sha256: %s\n'         '$($(d)_SHA256)'    ; \
 	    printf '        dest: %s\n'           '$(FLATPAK_DEPS_DIR)' ; \
 	    printf '        dest-filename: %s\n'  '$($(d)_TAR)'       ; )
-	@$(foreach d,$(GIT_DEPS), \
+	@$(foreach d,$(NEEDED_GIT_DEPS), \
 	    printf '      - type: git\n'                              ; \
 	    printf '        url: %s\n'            '$($(d)_REPO)'      ; \
 	    printf '        commit: %s\n'         '$($(d)_COMMIT)'    ; \
@@ -1138,11 +1182,10 @@ $(SQLCIPHER_SRC)/tclsqlite3.c: $(SQLCIPHER_SRC)
 
 # LibTomCrypt has no configure script, just a plain recursive Makefile
 # respecting CC/AR/RANLIB; windows.mk/android.mk override those three for
-# their cross toolchains. No CFLAGS override: its Makefile assigns CFLAGS
-# with a plain '=', which would clobber its own -I./src/headers.
+# their cross toolchains. Its makefile appends CFLAGS to its own LTC_CFLAGS.
 ifndef CROSS_OVERLAY
 $(PREFIX)/.libtomcrypt_installed: $(LIBTOMCRYPT_SRC)
-	$(MAKE) -C $(LIBTOMCRYPT_SRC) -j$(NPROC)
+	$(MAKE) -C $(LIBTOMCRYPT_SRC) CFLAGS="$(SIZE_CFLAGS)" -j$(NPROC)
 	mkdir -p $(PREFIX)/include $(PREFIX)/lib
 	cp -r $(LIBTOMCRYPT_SRC)/src/headers/. $(PREFIX)/include/
 	cp $(LIBTOMCRYPT_SRC)/libtomcrypt.a $(PREFIX)/lib/
@@ -1246,12 +1289,13 @@ drop-moved-cmake-cache = grep -qxF 'CMAKE_HOME_DIRECTORY:INTERNAL=$(2)' \
     $(1)/CMakeCache.txt 2>/dev/null || rm -rf $(1)
 
 # MBEDTLS_USER_CONFIG_FILE propagates as a PUBLIC compile def to consumers
-# via find_package(MbedTLS), so all callers see matching struct layouts.
+# via find_package(MbedTLS), so all callers see matching struct layouts. No PIC
+# on Emscripten, where cmake would turn it into -fPIC.
 $(PREFIX)/.mbedtls_installed: $(MBEDTLS_SRC)
 	@$(call drop-moved-cmake-cache,$(BUILDDIR)/mbedtls,$(MBEDTLS_SRC))
 	cmake -S $(MBEDTLS_SRC) -B $(BUILDDIR)/mbedtls $(CMAKE_TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=$(if $(EMSCRIPTEN),OFF,ON) \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX) \
 		-DCMAKE_INSTALL_LIBDIR=lib \
 		-DENABLE_PROGRAMS=OFF \
@@ -1337,21 +1381,19 @@ $(PREFIX)/.rtcmv_installed: $(TCLSH) $(if $(ANDROID)$(WIN),,$(WISH)) $(RTCMV_SRC
 	mkdir -p $(PREFIX)
 	touch $@
 
-# Shell out to picomemo's own Makefile. -fPIC overrides its STATIC_CF
-# default so the archive links into our PIE kitsh binary.
+# Shell out to picomemo's own Makefile. It sets no -O of its own.
 ifndef CROSS_OVERLAY
 $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 	$(MAKE) -C $(OMEMO_SRC) libtcl9omemo$(OMEMO_VER).a \
 		TCL_PREFIX=$(PREFIX) \
 		MBED_PREFIX=$(PREFIX) \
-		CFLAGS="-fPIC $(SIZE_CFLAGS)"
+		CFLAGS="-O2 $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 endif
 
 # Point TC{L,K}CONFIG at our install so tclwuffs's autodetect picks our
-# static headers/stubs over any system Tcl/Tk. -fPIC overrides upstream's
-# STATIC_CF default for our PIE kitsh link.
+# static headers/stubs over any system Tcl/Tk.
 TCLWUFFS_MAKE_TARGETS := tclwuffs
 TCLWUFFS_EXTRA_DEPS   :=
 ifneq (,$(filter tkwuffs,$(DEPS)))
@@ -1364,7 +1406,7 @@ $(TCLWUFFS_STAMP): $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
 		TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
 		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \
-		CFLAGS="-fPIC $(SIZE_CFLAGS)"
+		CFLAGS="$(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 endif
@@ -1377,7 +1419,8 @@ endif
 # Tcl_StaticPackage("Tkdnd") entry in kitsh.c. tkdnd is therefore kept out of
 # STATIC_PKGS — its own pkgIndex already registers `package ifneeded`. Tk
 # private headers (tkInt.h) come from the Tk source tree via tkConfig.sh's
-# TK_SRC_DIR, hence the $(WISH) dependency.
+# TK_SRC_DIR, hence the $(WISH) dependency. Its COMPILE line omits TEA's
+# SHLIB_CFLAGS, so -fPIC has to come through CFLAGS.
 ifndef CROSS_OVERLAY
 $(PREFIX)/.tkdnd_installed: $(TKDND_SRC) $(WISH)
 	mkdir -p $(TKDND_SRC)/build
@@ -1548,7 +1591,7 @@ endif
 # set matches) plus -I$(ZIPPYDIR) so it can include static_pkgs.h.
 $(SHIM_OBJ): $(LIB_SHIM_SRC) $(ZIPPYDIR)/static_pkgs.h $(DEP_STAMPS)
 	mkdir -p $(@D)
-	$(KITSH_LD) $(KITSH_CFLAGS) -I$(ZIPPYDIR) $(KITSH_DEP_FLAGS) -c -o $@ \
+	$(KITSH_LD) $(KITSH_CFLAGS) $(SIZE_CFLAGS) -I$(ZIPPYDIR) $(KITSH_DEP_FLAGS) -c -o $@ \
 	    $(KITSH_KITSH_LANG) $(LIB_SHIM_SRC) $(KITSH_KITSH_LANG_END)
 
 # lib$(LIB_NAME).a = shim + scripts.o + every static Tcl/dep archive, merged into
@@ -1580,12 +1623,56 @@ $(LIBOUT): $(SHIM_OBJ) $(SCRIPTS_OBJ) $(LIB_EXTRA_OBJS) $(DEP_STAMPS)
 	  echo 'save'; echo 'end'; } | $(KIT_AR) -M
 endif
 
+# test-pic: link the archive into a throwaway .so to catch non-PIC objects.
+# Only the shim is named, so just what an embedder would pull gets linked.
+# Undefined symbols are fine; the host links the system libs.
+.PHONY: test-pic
+ifeq (,$(MACOS)$(WIN)$(EMSCRIPTEN))
+test-pic: $(LIBOUT)
+	$(KITSH_LD) -shared -o $(BUILDDIR)/pic-check.so $(SHIM_OBJ) $(LIBOUT)
+	@echo "test-pic: $(notdir $(LIBOUT)) links into a shared object"
+else
+test-pic:
+	@echo "test-pic: skipped on TARGET_OS=$(TARGET_OS)"
+endif
+
 # ==== Test ====
-# Smoke test that builds standalone tclsh/wish across DEPS combinations and
-# asserts each works end-to-end. Depends on $(TCLSH)/$(WISH) so the Tcl/Tk
+# Smoke test that builds one standalone wish with most DEPS and asserts each
+# package works end-to-end. Depends on $(TCLSH)/$(WISH) so the Tcl/Tk
 # bootstrap is done before the per-case rebuilds.
 test: $(TCLSH) $(WISH)
 	$(ZIPPYDIR)/tests/smoke.sh
+
+# check-deps: build a few DEPS sets from scratch. Each gets its own BASEDIR and
+# DEPSDIR, since several deps build inside their source tree. Sources already
+# in DEPSDIR are hard-linked in instead of fetched again.
+CHECK_ROOT ?= $(BASEDIR)/_check
+CHECK_DESKTOP_DEPS ?= tdom mtls tcllib img rtc rtcma rtcmv rtcmv_tk omemo tclwuffs tkwuffs tkdnd
+CHECK_SETS := bare library desktop
+CHECK_bare_SHELL    := tclsh
+CHECK_bare_DEPS     :=
+CHECK_bare_GOALS    := tclsh lib test-pic
+CHECK_library_SHELL := tclsh
+CHECK_library_DEPS  := tdom tcllib mtls omemo
+CHECK_library_GOALS := tclsh lib test-pic
+CHECK_desktop_SHELL := wish
+CHECK_desktop_DEPS  := $(CHECK_DESKTOP_DEPS)
+CHECK_desktop_GOALS := wish lib test-pic
+
+.PHONY: check-deps $(addprefix check-deps-,$(CHECK_SETS))
+check-deps: $(addprefix check-deps-,$(CHECK_SETS))
+.NOTPARALLEL: check-deps
+$(addprefix check-deps-,$(CHECK_SETS)): check-deps-%:
+	mkdir -p $(CHECK_ROOT)/$*/deps
+	-[ -d $(DEPSDIR) ] && find $(DEPSDIR) -maxdepth 1 -type f \( -name '*.tar.*' -o -name '*.tgz' -o -name '*.zip' \) \
+	    -exec ln -f {} $(CHECK_ROOT)/$*/deps/ \;
+	-[ -d $(DEPSDIR)/git ] && [ ! -e $(CHECK_ROOT)/$*/deps/git ] && cp -al $(DEPSDIR)/git $(CHECK_ROOT)/$*/deps/git
+	$(MAKE) -f $(ZIPPYDIR)/zippy.mk \
+	    BASEDIR=$(CHECK_ROOT)/$* DEPSDIR=$(CHECK_ROOT)/$*/deps \
+	    SHELL_TYPE=$(CHECK_$*_SHELL) DEPS="$(CHECK_$*_DEPS)" \
+	    SOURCES=$(ZIPPYDIR)/tests/check_app LIB_SHIM_SRC=$(ZIPPYDIR)/tests/check_shim.c \
+	    LIB_NAME=check $(CHECK_$*_GOALS)
+	@echo "check-deps-$*: ok"
 
 # ==== Clean ====
 

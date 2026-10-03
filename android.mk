@@ -58,7 +58,7 @@ $(TCLSH): $(TCL_SRC)
 # tclsqlite3.c as every other target, cross-compiled the same isolated-copy
 # way as the native recipe.
 $(PREFIX)/.libtomcrypt_installed: $(LIBTOMCRYPT_SRC)
-	$(MAKE) -C $(LIBTOMCRYPT_SRC) $(ANDROID_TC) -j$(NPROC)
+	$(MAKE) -C $(LIBTOMCRYPT_SRC) $(ANDROID_TC) CFLAGS="$(SIZE_CFLAGS)" -j$(NPROC)
 	mkdir -p $(PREFIX)/include $(PREFIX)/lib
 	cp -r $(LIBTOMCRYPT_SRC)/src/headers/. $(PREFIX)/include/
 	cp $(LIBTOMCRYPT_SRC)/libtomcrypt.a $(PREFIX)/lib/
@@ -127,11 +127,11 @@ RTCMV_VPX_FLAGS := -DRTCMV_LIBVPX_TARGET=arm64-android-gcc \
 
 # ==== omemo / tclwuffs (own Makefiles) ====
 # In-place builds (the docker cache keeps DEPSDIR android-only) with the NDK
-# clang. -fPIC overrides their STATIC_CF default for the PIE kitsh link.
+# clang. picomemo sets no -O of its own.
 $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 	$(MAKE) -C $(OMEMO_SRC) libtcl9omemo$(OMEMO_VER).a \
 		$(ANDROID_TC) TCL_PREFIX=$(PREFIX) MBED_PREFIX=$(PREFIX) \
-		CFLAGS="-fPIC $(SIZE_CFLAGS)"
+		CFLAGS="-O2 $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 
@@ -139,7 +139,7 @@ $(TCLWUFFS_STAMP): $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 	$(MAKE) -C $(TCLWUFFS_SRC) $(TCLWUFFS_MAKE_TARGETS) \
 		$(ANDROID_TC) TCLCONFIG=$(PREFIX)/lib/tclConfig.sh \
 		TKCONFIG=$(PREFIX)/lib/tkConfig.sh \
-		CFLAGS="-fPIC $(SIZE_CFLAGS)"
+		CFLAGS="$(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 
@@ -148,7 +148,7 @@ $(TCLWUFFS_STAMP): $(TCLSH) $(TCLWUFFS_SRC) $(TCLWUFFS_EXTRA_DEPS)
 # pthread/dl into libc, so only libz/libm are named. rtc/rtcma add libdatachannel's
 # C++: link with clang++ (libc++_shared, since STATIC_LIBSTDCXX=0); zippy.mk's
 # rtc/rtcma block already set -xc to keep kitsh.c compiled as C.
-ifneq (,$(filter rtc rtcma,$(DEPS)))
+ifneq (,$(filter rtc rtcma rtcmv,$(DEPS)))
   KITSH_LD := $(ANDROID_CXX)
 else
   KITSH_LD := $(ANDROID_CC)
@@ -196,7 +196,7 @@ ANDROID_LIBCXX      := $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysr
 
 # libc++_shared.so is only NEEDED when the C++ deps are linked in (same filter as
 # the KITSH_LD gating above).
-ifneq (,$(filter rtc rtcma,$(DEPS)))
+ifneq (,$(filter rtc rtcma rtcmv,$(DEPS)))
   ANDROID_RUNTIME_LIBS := $(ANDROID_LIBCXX)
 endif
 

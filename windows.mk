@@ -148,7 +148,7 @@ $(SQLITE_WIN_LIB): $(TCLSH) $(SQLCIPHER_SRC)/tclsqlite3.c $(LIBTOMCRYPT_WIN_LIB)
 	rm -f $(SQLITE_BUILD)/*.o $(SQLITE_BUILD)/*.a \
 		$(SQLITE_BUILD)/config.status $(SQLITE_BUILD)/config.cache $(SQLITE_BUILD)/Makefile
 	cd $(SQLITE_BUILD) && \
-		CFLAGS="-DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_LIBTOMCRYPT \
+		CFLAGS="$(SIZE_CFLAGS) -DSQLITE_HAS_CODEC -DSQLCIPHER_CRYPTO_LIBTOMCRYPT \
 			-DSQLITE_EXTRA_INIT=sqlcipher_extra_init \
 			-DSQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown -DSQLITE_TEMP_STORE=2 \
 			-DSQLCIPHER_LOG_LEVEL_DEFAULT=0" \
@@ -229,7 +229,7 @@ $(PREFIX)/.omemo_installed: $(TCLSH) $(OMEMO_SRC) $(PREFIX)/.mbedtls_installed
 	$(MAKE) -C $(OMEMO_SRC) OUTDIR=$(OMEMO_BUILD) \
 		$(OMEMO_BUILD)/libtcl9omemo$(OMEMO_VER).a \
 		CC=$(CROSS)-gcc AR=$(CROSS)-ar RANLIB=$(CROSS)-ranlib \
-		TCL_PREFIX=$(PREFIX) MBED_PREFIX=$(PREFIX) CFLAGS="$(SIZE_CFLAGS)"
+		TCL_PREFIX=$(PREFIX) MBED_PREFIX=$(PREFIX) CFLAGS="-O2 $(SIZE_CFLAGS)"
 	mkdir -p $(PREFIX)
 	touch $@
 
@@ -299,7 +299,7 @@ $(KITSH_WISH) $(KITSH_TCLSH): $(THREAD_WIN_LIB) $(SQLITE_WIN_LIB) $(LIBTOMCRYPT_
 # is linked, matching zippy.mk's native gating; a pure-C build links with gcc.
 # -xc keeps kitsh.c compiled as C under g++ so the extern <Pkg>_Init decls retain
 # C linkage.
-ifneq (,$(filter rtc rtcma,$(DEPS)))
+ifneq (,$(filter rtc rtcma rtcmv,$(DEPS)))
   KITSH_LD := $(CROSS)-g++
   KITSH_KITSH_LANG     := -xc
   KITSH_KITSH_LANG_END := -xnone

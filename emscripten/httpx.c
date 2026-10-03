@@ -344,10 +344,6 @@ RequestCmd(void *cd, Tcl_Interp *ip, int objc, Tcl_Obj *const objv[])
     id = httpx_js_request(Tcl_GetString(objv[1]), Tcl_GetString(objv[2]),
         outfile, infile, Tcl_DStringValue(&packed), timeout);
     Tcl_DStringFree(&packed);
-    if (id < 0) {
-        Tcl_SetResult(ip, "no HTTP client in this environment", TCL_STATIC);
-        return TCL_ERROR;
-    }
 
     r = (HttpxReq *)ckalloc(sizeof *r);
     r->id = id;
@@ -435,6 +431,8 @@ CleanupCmd(void *cd, Tcl_Interp *ip, int objc, Tcl_Obj *const objv[])
     if ((r = ReqArg(ip, objv[1])) == NULL) {
         return TCL_ERROR;
     }
+    /* Abort first, or it keeps running and writes -outfile later. */
+    httpx_js_abort(r->id);
     httpx_js_forget(r->id);
     ReqForget(r->id);
     return TCL_OK;
